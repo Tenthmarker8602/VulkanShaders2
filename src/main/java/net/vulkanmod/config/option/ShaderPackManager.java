@@ -62,23 +62,41 @@ public class ShaderPackManager {
     private static void extractBundledPack(String packName) {
         Path packDir = SHADERPACKS_DIR.resolve(packName);
         
-        // Skip if already exists
-        if (Files.exists(packDir)) {
-            return;
-        }
-        
+        // Always re-extract to get latest shader changes during development
         try {
+            // First extract pack.json
             Files.createDirectories(packDir);
             
-            // Extract pack.json from classpath resources
             String jsonResource = "/shaderpacks/" + packName + "/pack.json";
             InputStream jsonStream = ShaderPackManager.class.getResourceAsStream(jsonResource);
             if (jsonStream != null) {
+                Files.deleteIfExists(packDir.resolve("pack.json"));
                 Files.copy(jsonStream, packDir.resolve("pack.json"));
                 jsonStream.close();
                 System.out.println("Extracted shader pack: " + packName);
             } else {
                 System.err.println("Could not find resource: " + jsonResource);
+                return;
+            }
+            
+            // Extract shader files (terrain pipeline)
+            String[] shaderFiles = {
+                "shaders/terrain/terrain.json",
+                "shaders/terrain/terrain.vsh",
+                "shaders/terrain/terrain.fsh"
+            };
+            
+            for (String shaderFile : shaderFiles) {
+                String resource = "/shaderpacks/" + packName + "/" + shaderFile;
+                InputStream stream = ShaderPackManager.class.getResourceAsStream(resource);
+                if (stream != null) {
+                    Path targetFile = packDir.resolve(shaderFile);
+                    Files.createDirectories(targetFile.getParent());
+                    Files.deleteIfExists(targetFile);
+                    Files.copy(stream, targetFile);
+                    stream.close();
+                    System.out.println("  Extracted: " + shaderFile);
+                }
             }
         } catch (Exception e) {
             System.err.println("Failed to extract shader pack " + packName + ": " + e.getMessage());

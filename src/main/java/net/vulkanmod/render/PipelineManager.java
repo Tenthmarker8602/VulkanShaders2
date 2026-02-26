@@ -24,6 +24,10 @@ public abstract class PipelineManager {
             terrainShader, terrainShaderEarlyZ,
             fastBlitPipeline, cloudsPipeline, overlayPipeline;
 
+    // Shader pack pipeline replacement system
+    private static GraphicsPipeline originalTerrainShader;
+    private static GraphicsPipeline shaderPackTerrainPipeline;
+
     private static Function<TerrainRenderType, GraphicsPipeline> shaderGetter;
 
     public static void init() {
@@ -92,7 +96,71 @@ public abstract class PipelineManager {
         return overlayPipeline;
     }
 
+    /**
+     * Apply a shader pack's terrain pipeline, replacing the default.
+     * Stores the original for later restoration.
+     */
+    public static void applyShaderPackTerrainPipeline(GraphicsPipeline newTerrain) {
+        // Store original if not already stored
+        if (originalTerrainShader == null) {
+            originalTerrainShader = terrainShader;
+        }
+
+        // Clean up any previous shader pack pipeline
+        if (shaderPackTerrainPipeline != null && shaderPackTerrainPipeline != terrainShader) {
+            shaderPackTerrainPipeline.scheduleCleanUp();
+        }
+
+        shaderPackTerrainPipeline = newTerrain;
+        terrainShader = newTerrain;
+
+        // Update the shader getter to use the new terrain pipeline
+        setShaderGetter(
+                renderType -> renderType == TerrainRenderType.TRANSLUCENT ? terrainShaderEarlyZ : terrainShader);
+
+        System.out.println("[PipelineManager] Shader pack terrain pipeline applied");
+    }
+
+    /**
+     * Restore the default terrain pipeline, removing shader pack overrides.
+     */
+    public static void restoreDefaultPipelines() {
+        if (originalTerrainShader != null) {
+            // Clean up shader pack pipeline
+            if (shaderPackTerrainPipeline != null) {
+                shaderPackTerrainPipeline.scheduleCleanUp();
+                shaderPackTerrainPipeline = null;
+            }
+
+            terrainShader = originalTerrainShader;
+            originalTerrainShader = null;
+
+            // Restore default shader getter
+            setDefaultShader();
+
+            System.out.println("[PipelineManager] Default terrain pipeline restored");
+        }
+    }
+
+    /**
+     * Check if a shader pack pipeline is currently active.
+     */
+    public static boolean hasShaderPackPipeline() {
+        return shaderPackTerrainPipeline != null;
+    }
+
     public static void destroyPipelines() {
+        // Clean up shader pack pipeline if active
+        if (shaderPackTerrainPipeline != null) {
+            shaderPackTerrainPipeline.cleanUp();
+            shaderPackTerrainPipeline = null;
+        }
+        // Restore original before cleanup if needed
+        if (originalTerrainShader != null) {
+            terrainShader = originalTerrainShader;
+            originalTerrainShader = null;
+        }
+
         terrainShaderEarlyZ.cleanUp();
         terrainShader.cleanUp();
         fastBlitPipeline.cleanUp();

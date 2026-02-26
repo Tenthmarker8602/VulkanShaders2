@@ -17,9 +17,11 @@ public class ShaderPackConfig {
     public static class PipelineConfig {
         public String name;
         public String type; // "graphics", "compute", or "ray_tracing"
+        public String target; // Target pipeline to replace: "terrain", "clouds", etc.
         public String vertex;
         public String fragment;
         public String compute;
+        public String config; // Path to VulkanMod-format pipeline JSON config
         public List<DescriptorSetConfig> descriptor_sets;
         public List<String> extensions; // Optional Vulkan extensions
     }

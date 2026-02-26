@@ -1,27 +1,16 @@
 {
   "name": "Test Shader Pack",
   "version": "1.0.0",
-  "description": "Bright green and cyan checkerboard test shader - visually obvious when working",
+  "description": "Vivid green/cyan tint shader - makes the world look lush and vibrant",
   "raytracing": false,
   "pipelines": [
     {
-      "name": "test_pipeline",
+      "name": "terrain",
       "type": "graphics",
-      "vertex": "core/test_color.vert",
-      "fragment": "core/test_color.frag",
-      "descriptor_sets": [
-        {
-          "set": 0,
-          "bindings": [
-            {
-              "binding": 0,
-              "type": "UNIFORM_BUFFER",
-              "name": "Camera",
-              "array_size": 1
-            }
-          ]
-        }
-      ]
+      "target": "terrain",
+      "vertex": "shaders/terrain/terrain.vsh",
+      "fragment": "shaders/terrain/terrain.fsh",
+      "config": "shaders/terrain/terrain.json"
     }
   ]
 }

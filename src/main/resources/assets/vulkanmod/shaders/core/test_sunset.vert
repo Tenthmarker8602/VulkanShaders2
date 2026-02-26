@@ -13,5 +13,5 @@ layout(binding = 0) uniform Camera {
 
 void main() {
     gl_Position = camera.projection * camera.view * vec4(in_position, 1.0);
-    out_color = vec4(1.0, 0.5, 0.0, 1.0); // Orange
+    out_color = vec4(1.0, 0.0, 0.0, 1.0); // Orange
 }

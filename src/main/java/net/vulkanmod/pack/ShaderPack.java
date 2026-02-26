@@ -81,18 +81,22 @@ public class ShaderPack {
     public static class PipelineDefinition {
         private final String name;
         private final PipelineType type;
+        private final String target;
         private final String vertexShader;
         private final String fragmentShader;
         private final String computeShader;
+        private final String configPath;
         private final List<DescriptorSetDefinition> descriptorSets;
         private final List<String> requiredExtensions;
         
         public PipelineDefinition(ShaderPackConfig.PipelineConfig config, Path packPath) {
             this.name = config.name;
             this.type = PipelineType.fromString(config.type);
+            this.target = config.target != null ? config.target : "";
             this.vertexShader = config.vertex != null ? config.vertex : "";
             this.fragmentShader = config.fragment != null ? config.fragment : "";
             this.computeShader = config.compute != null ? config.compute : "";
+            this.configPath = config.config != null ? config.config : "";
             this.requiredExtensions = config.extensions != null ? new ArrayList<>(config.extensions) : new ArrayList<>();
             
             this.descriptorSets = new ArrayList<>();
@@ -110,6 +114,10 @@ public class ShaderPack {
         public PipelineType getType() {
             return type;
         }
+
+        public String getTarget() {
+            return target;
+        }
         
         public String getVertexShader() {
             return vertexShader;
@@ -121,6 +129,10 @@ public class ShaderPack {
         
         public String getComputeShader() {
             return computeShader;
+        }
+
+        public String getConfigPath() {
+            return configPath;
         }
         
         public List<DescriptorSetDefinition> getDescriptorSets() {

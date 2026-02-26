@@ -307,20 +307,21 @@ public abstract class Options {
                                         System.out.println("[Options] Shader pack selected: " + pack.getName() + " v" + pack.getVersion());
                                         System.out.println("[Options] Pipelines: " + pack.getPipelines().size());
                                         
-                                        // Try to apply immediately if VulkanShaders is ready
-                                        if (net.vulkanmod.VulkanShaders.isInitialized()) {
-                                            try {
-                                                net.vulkanmod.VulkanShaders.getInstance().loadShaderPack(pack.getPackPath());
-                                                System.out.println("[Options] Shader pack applied successfully");
-                                            } catch (Exception e) {
-                                                System.err.println("[Options] Failed to apply shader pack: " + e.getMessage());
-                                                e.printStackTrace();
+                                        // Apply shader pack pipeline replacement
+                                        try {
+                                            boolean applied = net.vulkanmod.render.shader.ShaderPackPipelineLoader.getInstance().applyShaderPack(pack);
+                                            if (applied) {
+                                                System.out.println("[Options] Shader pack pipelines applied successfully");
+                                            } else {
+                                                System.out.println("[Options] No pipeline replacements found in shader pack");
                                             }
-                                        } else {
-                                            System.out.println("[Options] VulkanShaders not yet initialized, pack will be applied when ready");
+                                        } catch (Exception e) {
+                                            System.err.println("[Options] Failed to apply shader pack: " + e.getMessage());
+                                            e.printStackTrace();
                                         }
                                     } else {
                                         System.out.println("[Options] Shader pack disabled");
+                                        net.vulkanmod.render.shader.ShaderPackPipelineLoader.getInstance().restoreDefaults();
                                     }
                                 },
                                 ShaderPackManager::getCurrentPackName

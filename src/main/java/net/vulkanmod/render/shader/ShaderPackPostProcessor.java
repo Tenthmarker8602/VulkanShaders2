@@ -33,6 +33,8 @@ public class ShaderPackPostProcessor {
         return instance;
     }
 
+    private boolean pipelineApplied = false;
+
     /**
      * Apply shader pack post-processing effects.
      * Called BEFORE mainPass.end() while the Vulkan render pass is still active.
@@ -46,12 +48,14 @@ public class ShaderPackPostProcessor {
         if (pack == null) {
             if (lastPackName != null) {
                 System.out.println("[ShaderPackPostProcessor] Shader pack disabled");
+                ShaderPackPipelineLoader.getInstance().restoreDefaults();
                 lastPackName = null;
+                pipelineApplied = false;
             }
             return;
         }
 
-        // Log shader pack activity (only on first activation)
+        // On first activation or pack change, apply the real Vulkan pipeline
         if (!pack.getName().equals(lastPackName)) {
             System.out.println("[ShaderPackPostProcessor] =========================================");
             System.out.println("[ShaderPackPostProcessor] SHADER PACK ACTIVE: " + pack.getName());
@@ -60,19 +64,37 @@ public class ShaderPackPostProcessor {
             System.out.println("[ShaderPackPostProcessor] =========================================");
             lastPackName = pack.getName();
             frameCount = 0;
+            pipelineApplied = false;
+        }
+
+        // Lazily apply pipeline replacement (needs to happen on the render thread)
+        if (!pipelineApplied) {
+            try {
+                boolean applied = ShaderPackPipelineLoader.getInstance().applyShaderPack(pack);
+                if (applied) {
+                    System.out.println("[ShaderPackPostProcessor] Pipeline replacement applied for: " + pack.getName());
+                } else {
+                    System.out.println("[ShaderPackPostProcessor] No pipeline replacements in pack: " + pack.getName());
+                }
+                pipelineApplied = true;
+            } catch (Exception e) {
+                System.err.println("[ShaderPackPostProcessor] Failed to apply pipeline: " + e.getMessage());
+                e.printStackTrace();
+                pipelineApplied = true; // Don't retry
+            }
         }
 
         renderShaderPackIndicator(pack);
 
         frameCount++;
-        if (frameCount % 300 == 0) {
-            System.out.println("[ShaderPackPostProcessor] Shader pack '" + pack.getName() + "' processing frame " + frameCount);
+        if (frameCount % 600 == 0) {
+            System.out.println("[ShaderPackPostProcessor] Shader pack '" + pack.getName() + "' active, frame " + frameCount);
         }
     }
 
     /**
-     * Draws a colored border around the screen using VulkanMod's Vulkan rendering.
-     * Uses the clouds pipeline (POSITION_COLOR format) to draw quads directly.
+     * Draws a small indicator bar at the top of the screen to show active shader pack.
+     * The real visual effect comes from the terrain pipeline replacement.
      */
     private void renderShaderPackIndicator(ShaderPack pack) {
         Renderer renderer = Renderer.getInstance();
@@ -82,24 +104,22 @@ public class ShaderPackPostProcessor {
 
         // Determine color based on shader pack
         int r, g, b, a;
-        if (pack.getName().contains("Test")) {
-            r = 0; g = 255; b = 0; a = 128;   // Green
+        if (pack.getName().contains("Test") && !pack.getName().contains("Sunset")) {
+            r = 0; g = 200; b = 100; a = 100;   // Green
         } else if (pack.getName().contains("Sunset")) {
-            r = 255; g = 128; b = 0; a = 128;  // Orange
+            r = 255; g = 140; b = 0; a = 100;    // Orange
         } else {
-            r = 0; g = 255; b = 255; a = 128;  // Cyan
+            r = 0; g = 200; b = 255; a = 100;    // Cyan
         }
         int color = (a << 24) | (r << 16) | (g << 8) | b;
 
         int fbWidth = renderer.getBoundFramebuffer().getWidth();
         int fbHeight = renderer.getBoundFramebuffer().getHeight();
-        float bw = Math.max(4.0f, fbWidth * 0.01f);  // 1% border width, min 4px
-        float bh = Math.max(4.0f, fbHeight * 0.01f);
+        float barHeight = 3.0f; // thin indicator bar
 
         try {
             GraphicsPipeline pipeline = PipelineManager.getOverlayPipeline();
 
-            // Set render state for 2D overlay
             VRenderSystem.enableBlend();
             VRenderSystem.blendFuncSeparate(
                 GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA,
@@ -107,52 +127,28 @@ public class ShaderPackPostProcessor {
             VRenderSystem.disableDepthTest();
             VRenderSystem.disableCull();
             VRenderSystem.setPrimitiveTopologyGL(GL11.GL_TRIANGLES);
-
-            // Set shader color to white (color comes from vertex data)
             VRenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-            // Set up orthographic projection matching screen pixels
             Matrix4f modelView = new Matrix4f().identity();
             Matrix4f projection = new Matrix4f().setOrtho(0.0f, fbWidth, fbHeight, 0.0f, -1.0f, 1.0f);
             VRenderSystem.applyMVP(modelView, projection);
 
-            // Bind pipeline and uniforms
             renderer.bindGraphicsPipeline(pipeline);
             VTextureSelector.bindShaderTextures(pipeline);
             renderer.uploadAndBindUBOs(pipeline);
 
-            // Set viewport and scissor for full framebuffer
             Renderer.setViewport(0, 0, fbWidth, fbHeight);
             Renderer.setScissor(0, 0, fbWidth, fbHeight);
 
-            // Build border quads
             Tesselator tesselator = Tesselator.getInstance();
             BufferBuilder bufferBuilder = tesselator.begin(
                 VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
 
-            // Top border
+            // Top indicator bar
             bufferBuilder.addVertex(0, 0, 0).setColor(color);
             bufferBuilder.addVertex(fbWidth, 0, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth, bh, 0).setColor(color);
-            bufferBuilder.addVertex(0, bh, 0).setColor(color);
-
-            // Bottom border
-            bufferBuilder.addVertex(0, fbHeight - bh, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth, fbHeight - bh, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth, fbHeight, 0).setColor(color);
-            bufferBuilder.addVertex(0, fbHeight, 0).setColor(color);
-
-            // Left border
-            bufferBuilder.addVertex(0, bh, 0).setColor(color);
-            bufferBuilder.addVertex(bw, bh, 0).setColor(color);
-            bufferBuilder.addVertex(bw, fbHeight - bh, 0).setColor(color);
-            bufferBuilder.addVertex(0, fbHeight - bh, 0).setColor(color);
-
-            // Right border
-            bufferBuilder.addVertex(fbWidth - bw, bh, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth, bh, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth, fbHeight - bh, 0).setColor(color);
-            bufferBuilder.addVertex(fbWidth - bw, fbHeight - bh, 0).setColor(color);
+            bufferBuilder.addVertex(fbWidth, barHeight, 0).setColor(color);
+            bufferBuilder.addVertex(0, barHeight, 0).setColor(color);
 
             MeshData meshData = bufferBuilder.buildOrThrow();
             Renderer.getDrawer().draw(
@@ -160,15 +156,13 @@ public class ShaderPackPostProcessor {
                 DefaultVertexFormat.POSITION_COLOR, meshData.drawState().vertexCount());
             meshData.close();
 
-            // Restore render state
             VRenderSystem.enableDepthTest();
             VRenderSystem.enableCull();
             VRenderSystem.disableBlend();
 
         } catch (Exception e) {
-            if (frameCount % 300 == 0) {
-                System.err.println("[ShaderPackPostProcessor] Render error: " + e.getMessage());
-                e.printStackTrace();
+            if (frameCount % 600 == 0) {
+                System.err.println("[ShaderPackPostProcessor] Indicator render error: " + e.getMessage());
             }
         }
     }
