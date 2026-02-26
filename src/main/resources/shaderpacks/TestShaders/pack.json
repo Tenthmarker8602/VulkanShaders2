@@ -1,0 +1,27 @@
+{
+  "name": "Test Shader Pack",
+  "version": "1.0.0",
+  "description": "Bright green and cyan checkerboard test shader - visually obvious when working",
+  "raytracing": false,
+  "pipelines": [
+    {
+      "name": "test_pipeline",
+      "type": "graphics",
+      "vertex": "core/test_color.vert",
+      "fragment": "core/test_color.frag",
+      "descriptor_sets": [
+        {
+          "set": 0,
+          "bindings": [
+            {
+              "binding": 0,
+              "type": "UNIFORM_BUFFER",
+              "name": "Camera",
+              "array_size": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

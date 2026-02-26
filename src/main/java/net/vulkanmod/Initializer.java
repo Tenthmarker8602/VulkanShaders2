@@ -11,6 +11,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 public class Initializer implements ClientModInitializer {
 	public static final Logger LOGGER = LogManager.getLogger("VulkanMod");
@@ -37,6 +38,23 @@ public class Initializer implements ClientModInitializer {
 				.resolve("vulkanmod_settings.json");
 
 		CONFIG = loadConfig(configPath);
+
+		// Initialize VulkanShaders system with shader assets path
+		try {
+			Path shadersPath = Paths.get("assets/vulkanmod/shaders");
+			VulkanShaders.initialize(shadersPath);
+			LOGGER.info("VulkanShaders system initialized");
+		} catch (Exception e) {
+			LOGGER.warn("Failed to initialize VulkanShaders", e);
+		}
+
+		// Initialize shader pack manager - this will extract and scan shader packs
+		try {
+			net.vulkanmod.config.option.ShaderPackManager.getAvailablePacks();
+			LOGGER.info("Shader pack manager initialized");
+		} catch (Exception e) {
+			LOGGER.warn("Failed to initialize shader pack manager", e);
+		}
 
 		Renderer.register(VulkanModRenderer.INSTANCE);
 	}

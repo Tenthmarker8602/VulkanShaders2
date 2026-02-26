@@ -1,0 +1,27 @@
+{
+  "name": "Sunset Test Pack",
+  "version": "1.0.0",
+  "description": "Orange to red gradient test shader - demonstrates shader compilation and visual output",
+  "raytracing": false,
+  "pipelines": [
+    {
+      "name": "sunset_pipeline",
+      "type": "graphics",
+      "vertex": "core/test_sunset.vert",
+      "fragment": "core/test_sunset.frag",
+      "descriptor_sets": [
+        {
+          "set": 0,
+          "bindings": [
+            {
+              "binding": 0,
+              "type": "UNIFORM_BUFFER",
+              "name": "Camera",
+              "array_size": 1
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

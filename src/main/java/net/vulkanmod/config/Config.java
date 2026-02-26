@@ -30,6 +30,10 @@ public class Config {
     public boolean backFaceCulling = true;
     public boolean textureAnimations = true;
 
+    public String shaderPack = "None";
+    public boolean shaderDebugMode = false;
+    public boolean hotReloadShaders = false;
+
     public void write() {
 
         if(!Files.exists(CONFIG_PATH.getParent())) {

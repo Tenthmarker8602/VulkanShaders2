@@ -68,6 +68,12 @@ public class VOptionScreen extends Screen {
         this.optionPages.add(page);
 
         page = new OptionPage(
+                Component.translatable("vulkanmod.options.pages.shaders").getString(),
+                Options.getShaderOpts()
+        );
+        this.optionPages.add(page);
+
+        page = new OptionPage(
                 Component.translatable("vulkanmod.options.pages.optimizations").getString(),
                 Options.getOptimizationOpts()
         );

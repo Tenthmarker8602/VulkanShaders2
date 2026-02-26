@@ -22,7 +22,7 @@ public abstract class PipelineManager {
 
     static GraphicsPipeline
             terrainShader, terrainShaderEarlyZ,
-            fastBlitPipeline, cloudsPipeline;
+            fastBlitPipeline, cloudsPipeline, overlayPipeline;
 
     private static Function<TerrainRenderType, GraphicsPipeline> shaderGetter;
 
@@ -43,6 +43,7 @@ public abstract class PipelineManager {
         terrainShader = createPipeline("terrain", terrainVertexFormat);
         fastBlitPipeline = createPipeline("blit", CustomVertexFormat.NONE);
         cloudsPipeline = createPipeline("clouds", DefaultVertexFormat.POSITION_COLOR);
+        overlayPipeline = createPipeline("overlay", DefaultVertexFormat.POSITION_COLOR);
     }
 
     private static GraphicsPipeline createPipeline(String configName, VertexFormat vertexFormat) {
@@ -87,10 +88,15 @@ public abstract class PipelineManager {
         return cloudsPipeline;
     }
 
+    public static GraphicsPipeline getOverlayPipeline() {
+        return overlayPipeline;
+    }
+
     public static void destroyPipelines() {
         terrainShaderEarlyZ.cleanUp();
         terrainShader.cleanUp();
         fastBlitPipeline.cleanUp();
         cloudsPipeline.cleanUp();
+        overlayPipeline.cleanUp();
     }
 }

@@ -3,6 +3,7 @@
 
   "vulkanmod.options.pages.video": "Video",
   "vulkanmod.options.pages.graphics": "Graphics",
+  "vulkanmod.options.pages.shaders": "Shaders",
   "vulkanmod.options.pages.optimizations": "Optimizations",
   "vulkanmod.options.pages.other": "Other",
 
@@ -46,5 +47,14 @@
   "vulkanmod.options.builderThreads": "Chunk Builder Threads",
   "vulkanmod.options.builderThreads.auto": "Auto",
 
-  "vulkanmod.options.textureAnimations": "Texture Animations"
+  "vulkanmod.options.textureAnimations": "Texture Animations",
+
+  "vulkanmod.options.shaderPack": "Shader Pack",
+  "vulkanmod.options.shaderPack.tooltip": "Select a shader pack to apply custom rendering effects.",
+  "vulkanmod.options.reloadShaders": "Reload Shaders",
+  "vulkanmod.options.reloadShaders.tooltip": "Scan and reload all available shader packs from the shaderpacks folder.",
+  "vulkanmod.options.shaderDebug": "Shader Debug Mode",
+  "vulkanmod.options.shaderDebug.tooltip": "Enable debug output for shader compilation and pipeline creation.",
+  "vulkanmod.options.hotReloadShaders": "Hot Reload Shaders",
+  "vulkanmod.options.hotReloadShaders.tooltip": "Automatically reload shaders when shader files are modified (experimental)."
 }

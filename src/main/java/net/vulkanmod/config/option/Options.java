@@ -287,6 +287,71 @@ public abstract class Options {
 
     }
 
+    public static OptionBlock[] getShaderOpts() {
+        ShaderPackManager.scanAvailablePacks();
+        String[] packNames = ShaderPackManager.getPackNames();
+
+        return new OptionBlock[]{
+                new OptionBlock("", new Option[]{
+                        new CyclingOption<>(
+                                Component.translatable("vulkanmod.options.shaderPack"),
+                                packNames,
+                                value -> {
+                                    net.vulkanmod.pack.ShaderPack pack = ShaderPackManager.getPackByName(value);
+                                    ShaderPackManager.setCurrentPack(pack);
+                                    
+                                    // Also notify the shader pack renderer to apply changes
+                                    net.vulkanmod.render.shader.ShaderPackRenderer.getInstance().onShaderPackSelected(pack);
+                                    
+                                    if (pack != null) {
+                                        System.out.println("[Options] Shader pack selected: " + pack.getName() + " v" + pack.getVersion());
+                                        System.out.println("[Options] Pipelines: " + pack.getPipelines().size());
+                                        
+                                        // Try to apply immediately if VulkanShaders is ready
+                                        if (net.vulkanmod.VulkanShaders.isInitialized()) {
+                                            try {
+                                                net.vulkanmod.VulkanShaders.getInstance().loadShaderPack(pack.getPackPath());
+                                                System.out.println("[Options] Shader pack applied successfully");
+                                            } catch (Exception e) {
+                                                System.err.println("[Options] Failed to apply shader pack: " + e.getMessage());
+                                                e.printStackTrace();
+                                            }
+                                        } else {
+                                            System.out.println("[Options] VulkanShaders not yet initialized, pack will be applied when ready");
+                                        }
+                                    } else {
+                                        System.out.println("[Options] Shader pack disabled");
+                                    }
+                                },
+                                ShaderPackManager::getCurrentPackName
+                        ).setTranslator(value -> Component.nullToEmpty(value))
+                                .setTooltip(Component.translatable("vulkanmod.options.shaderPack.tooltip")),
+                        new SwitchOption(
+                                Component.translatable("vulkanmod.options.reloadShaders"),
+                                value -> {
+                                    if (value) {
+                                        ShaderPackManager.reload();
+                                        System.out.println("Shader packs reloaded");
+                                    }
+                                },
+                                () -> false
+                        ).setTooltip(Component.translatable("vulkanmod.options.reloadShaders.tooltip"))
+                }),
+                new OptionBlock("", new Option[]{
+                        new SwitchOption(
+                                Component.translatable("vulkanmod.options.shaderDebug"),
+                                value -> config.shaderDebugMode = value,
+                                () -> config.shaderDebugMode
+                        ).setTooltip(Component.translatable("vulkanmod.options.shaderDebug.tooltip")),
+                        new SwitchOption(
+                                Component.translatable("vulkanmod.options.hotReloadShaders"),
+                                value -> config.hotReloadShaders = value,
+                                () -> config.hotReloadShaders
+                        ).setTooltip(Component.translatable("vulkanmod.options.hotReloadShaders.tooltip"))
+                })
+        };
+    }
+
     public static OptionBlock[] getOtherOpts() {
         return new OptionBlock[]{
                 new OptionBlock("", new Option[]{

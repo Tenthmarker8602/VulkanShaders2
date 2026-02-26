@@ -330,6 +330,13 @@ public class Renderer {
         Profiler p = Profiler.getMainProfiler();
         p.push("End_rendering");
 
+        // Apply shader pack visual effects while render pass is still active
+        try {
+            net.vulkanmod.render.shader.ShaderPackPostProcessor.getInstance().applyShaderPack();
+        } catch (Exception e) {
+            System.err.println("Error applying shader pack: " + e.getMessage());
+        }
+
         mainPass.end(currentCmdBuffer);
 
         submitUploads();
