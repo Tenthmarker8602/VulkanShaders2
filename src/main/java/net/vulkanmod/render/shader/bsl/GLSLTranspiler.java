@@ -61,12 +61,7 @@ public class GLSLTranspiler {
     private static final String FEATURE_OVERRIDES = """
             
             // ====== BSL Compatibility: Feature Overrides ======
-            #ifdef SHADOW
-            #undef SHADOW
-            #endif
-            #ifdef SHADOW_FILTER
-            #undef SHADOW_FILTER
-            #endif
+            // SHADOW is enabled - shadow map pass is implemented
             #ifdef SHADOW_COLOR
             #undef SHADOW_COLOR
             #endif
@@ -137,15 +132,40 @@ public class GLSLTranspiler {
         VARYING_LOCATIONS.put("viewPos_v", 10);  // vec3 — view-space position
     }
 
+    /** Water shader varying locations (extends terrain with extra varyings) */
+    private static final Map<String, Integer> WATER_VARYING_LOCATIONS = new LinkedHashMap<>();
+    static {
+        WATER_VARYING_LOCATIONS.putAll(VARYING_LOCATIONS);
+        // Water-specific varyings
+        WATER_VARYING_LOCATIONS.put("dist", 11);       // float — distance from camera
+        WATER_VARYING_LOCATIONS.put("binormal", 12);   // vec3
+        WATER_VARYING_LOCATIONS.put("tangent", 13);    // vec3
+        WATER_VARYING_LOCATIONS.put("viewVector", 14); // vec3
+        WATER_VARYING_LOCATIONS.put("vTexCoord", 15);  // vec4
+        // vTexCoordAM removed — exceeds max locations, stub in fragment
+    }
+
     /** Sampler binding assignments */
     private static final Map<String, Integer> SAMPLER_BINDINGS = new LinkedHashMap<>();
     static {
         SAMPLER_BINDINGS.put("texture", 2);   // BSL's main texture → Sampler0 binding
         SAMPLER_BINDINGS.put("Sampler0", 2);
+        SAMPLER_BINDINGS.put("colortex0", 2); // alias after rename
         SAMPLER_BINDINGS.put("Sampler2", 3);  // lightmap
-        SAMPLER_BINDINGS.put("noisetex", 4);  // noise texture (stubbed)
-        SAMPLER_BINDINGS.put("specular", 5);  // PBR specular (unused with ADVANCED_MATERIALS off)
-        SAMPLER_BINDINGS.put("normals", 6);   // PBR normals (unused)
+        SAMPLER_BINDINGS.put("shadowtex0", 4); // shadow depth map
+        SAMPLER_BINDINGS.put("shadowtex1", 5); // shadow depth (no translucents)
+        SAMPLER_BINDINGS.put("noisetex", 6);  // noise texture
+        // specular, normals, shadowcolor0 NOT mapped — their usages are inside
+        // #ifdef ADVANCED_MATERIALS / SHADOW_COLOR which are undefined, so the preprocessor
+        // removes all references. Commenting out declarations avoids binding collisions.
+        // Stub samplers — each needs a unique, sequential binding matching pipeline auto-increment.
+        // Pipeline order after 2 UBOs: Sampler0(2), Sampler2(3), Sampler4(4), Sampler5(5),
+        // Sampler6(6), Sampler7(7), Sampler8(8), Sampler9(9), Sampler10(10)
+        SAMPLER_BINDINGS.put("depthtex1", 7);  // depth buffer (stub)
+        SAMPLER_BINDINGS.put("depthtex0", 8);  // main depth (stub)
+        SAMPLER_BINDINGS.put("gaux1", 9);      // aux buffer 1 (stub)
+        SAMPLER_BINDINGS.put("gaux2", 10);     // aux buffer 2 (stub)
+        SAMPLER_BINDINGS.put("gcolor", 2);     // alias for colortex0
     }
 
     /**
@@ -181,6 +201,12 @@ public class GLSLTranspiler {
         // Replace texture functions
         source = replaceTextureFunctions(source);
 
+        // Remove sampler2DShadow overloads that would conflict after type conversion.
+        // BSL defines e.g. texture2DShadow(sampler2DShadow, vec3) alongside
+        // texture2DShadow(sampler2D, vec3). After converting sampler2DShadow→sampler2D,
+        // these become duplicate definitions. Remove the sampler2DShadow version.
+        source = removeShadowSamplerOverloads(source);
+
         // Replace shadow2DSampler types
         source = SAMPLER2DSHADOW_PATTERN.matcher(source).replaceAll("sampler2D");
 
@@ -199,12 +225,171 @@ public class GLSLTranspiler {
         return source;
     }
 
+    /** Sky shader varying locations (minimal: alpha, sunVec, upVec) */
+    private static final Map<String, Integer> SKY_VARYING_LOCATIONS = new LinkedHashMap<>();
+    static {
+        SKY_VARYING_LOCATIONS.put("alpha", 0);     // float
+        SKY_VARYING_LOCATIONS.put("sunVec", 1);    // vec3
+        SKY_VARYING_LOCATIONS.put("upVec", 2);     // vec3
+    }
+
+    /**
+     * Transpile the BSL sky basic fragment shader (gbuffers_skybasic).
+     * Uses sky-specific varying locations and stubs missing uniforms.
+     */
+    public static String transpileSkyFragment(String source) {
+        Map<String, Integer> savedLocations = new LinkedHashMap<>(VARYING_LOCATIONS);
+        VARYING_LOCATIONS.clear();
+        VARYING_LOCATIONS.putAll(SKY_VARYING_LOCATIONS);
+
+        try {
+            // Add sky-specific feature overrides
+            String skyFeatureOverrides = """
+
+                    // ====== BSL Sky Feature Overrides ======
+                    #ifdef SKY_DEFERRED
+                    #undef SKY_DEFERRED
+                    #endif
+                    // Enable procedural sun/moon disc in sky shader
+                    #ifndef SHADER_SUN_MOON
+                    #define SHADER_SUN_MOON
+                    #endif
+                    // Make sun/moon disc larger for visibility (debug)
+                    #undef SHADER_SUN_MOON_SIZE
+                    #define SHADER_SUN_MOON_SIZE 3.0
+                    // Stubs for missing uniforms
+                    #define blindFactor 0.0
+                    #define darknessFactor 0.0
+                    #define bedrockLevel 0
+                    // ====== End Sky Feature Overrides ======
+
+                    """;
+
+            source = injectFeatureOverrides(source);
+
+            String endMarker = "// ====== End Feature Overrides ======";
+            int endIdx = source.indexOf(endMarker);
+            if (endIdx >= 0) {
+                endIdx += endMarker.length();
+                source = source.substring(0, endIdx) + skyFeatureOverrides + source.substring(endIdx);
+            }
+
+            source = removeConflictingConsts(source);
+            source = VERSION_PATTERN.matcher(source).replaceFirst("#version 450");
+            source = EXTENSION_PATTERN.matcher(source).replaceAll("");
+            source = convertVaryingsToInputs(source);
+            source = convertUniforms(source);
+            source = source.replaceAll("\\btexture\\b", "colortex0");
+            source = replaceTextureFunctions(source);
+            source = removeShadowSamplerOverloads(source);
+            source = SAMPLER2DSHADOW_PATTERN.matcher(source).replaceAll("sampler2D");
+            source = convertFragmentOutputs(source);
+            source = FRAG_COLOR_PATTERN.matcher(source).replaceAll("bsl_fragData0");
+            source = ATTRIBUTE_PATTERN.matcher(source).replaceAll("// [BSL removed attribute] $0");
+            source = addFragmentPreamble(source);
+
+            return source;
+
+        } finally {
+            VARYING_LOCATIONS.clear();
+            VARYING_LOCATIONS.putAll(savedLocations);
+        }
+    }
+
+    /**
+     * Transpile the BSL water fragment shader (gbuffers_water).
+     * Uses water-specific varying locations and adds depthtex/gaux stubs.
+     */
+    public static String transpileWaterFragment(String source) {
+        // Same pipeline as terrain but with water varying locations
+        // Swap in water varying locations temporarily
+        Map<String, Integer> savedLocations = new LinkedHashMap<>(VARYING_LOCATIONS);
+        VARYING_LOCATIONS.clear();
+        VARYING_LOCATIONS.putAll(WATER_VARYING_LOCATIONS);
+
+        try {
+            // Add extra water feature overrides
+            String waterFeatureOverrides = """
+
+                    // ====== BSL Water Feature Overrides ======
+                    #ifdef REFLECTION_SPECULAR
+                    #undef REFLECTION_SPECULAR
+                    #endif
+                    #ifdef REFLECTION_RAIN
+                    #undef REFLECTION_RAIN
+                    #endif
+                    // vTexCoordAM stub — not available from VulkanMod terrain vertex format
+                    #define vTexCoordAM vec4(0.0, 0.0, 1.0, 1.0)
+                    // Stub missing uniforms
+                    #define blindFactor 0.0
+                    #define darknessFactor 0.0
+                    // ====== End Water Feature Overrides ======
+
+                    """;
+
+            source = injectFeatureOverrides(source);
+
+            // Insert water overrides after the main feature overrides
+            String endMarker = "// ====== End Feature Overrides ======";
+            int endIdx = source.indexOf(endMarker);
+            if (endIdx >= 0) {
+                endIdx += endMarker.length();
+                source = source.substring(0, endIdx) + waterFeatureOverrides + source.substring(endIdx);
+            }
+
+            source = removeConflictingConsts(source);
+            source = VERSION_PATTERN.matcher(source).replaceFirst("#version 450");
+            source = EXTENSION_PATTERN.matcher(source).replaceAll("");
+            source = convertVaryingsToInputs(source);
+            source = convertUniforms(source);
+            source = source.replaceAll("\\btexture\\b", "colortex0");
+            source = replaceTextureFunctions(source);
+            source = removeShadowSamplerOverloads(source);
+            source = SAMPLER2DSHADOW_PATTERN.matcher(source).replaceAll("sampler2D");
+            source = convertFragmentOutputs(source);
+            source = FRAG_COLOR_PATTERN.matcher(source).replaceAll("bsl_fragData0");
+            source = ATTRIBUTE_PATTERN.matcher(source).replaceAll("// [BSL removed attribute] $0");
+
+            // depthtex1, depthtex0, gaux1, gaux2 are declared with unique bindings and
+            // bound to stub textures at runtime (shadow depth image as placeholder).
+            // No need to redirect reads — stubs provide valid depth-like values.
+
+            source = addFragmentPreamble(source);
+
+            return source;
+
+        } finally {
+            // Restore terrain varying locations
+            VARYING_LOCATIONS.clear();
+            VARYING_LOCATIONS.putAll(savedLocations);
+        }
+    }
+
     /**
      * Remove const declarations that would conflict with UBO members.
      */
     private static String removeConflictingConsts(String source) {
         source = CONST_SUNPATH_PATTERN.matcher(source).replaceAll(
                 "$1// [BSL] const sunPathRotation moved to UBO");
+        return source;
+    }
+
+    /**
+     * Remove function overloads that use sampler2DShadow parameter type.
+     * BSL defines e.g.:
+     *   float texture2DShadow(sampler2D shadowtex, vec3 shadowPos) { ... }
+     *   float texture2DShadow(sampler2DShadow shadowtex, vec3 shadowPos) { ... }
+     * After converting sampler2DShadow → sampler2D, these become duplicates.
+     * Remove the sampler2DShadow versions since we use software shadow comparison.
+     */
+    private static String removeShadowSamplerOverloads(String source) {
+        // Match function definitions with sampler2DShadow parameter
+        // Pattern: returnType funcName(sampler2DShadow ...) { ... }
+        Pattern shadowOverloadPattern = Pattern.compile(
+                "\\w+\\s+\\w+\\s*\\([^)]*sampler2DShadow[^)]*\\)\\s*\\{[^}]*\\}",
+                Pattern.DOTALL);
+        source = shadowOverloadPattern.matcher(source).replaceAll(
+                "// [BSL] Removed sampler2DShadow overload (using sampler2D version)");
         return source;
     }
 
@@ -377,7 +562,9 @@ public class GLSLTranspiler {
         source = TEX2DLOD_PATTERN.matcher(source).replaceAll("textureLod(");
         source = TEX2D_PATTERN.matcher(source).replaceAll("texture(");
         source = TEX3D_PATTERN.matcher(source).replaceAll("texture(");
-        source = SHADOW2D_PATTERN.matcher(source).replaceAll("texture(");
+        // shadow2D(sampler, vec3(xy, z)) → bsl_shadow2D(sampler, vec3(xy, z))
+        // We use a manual comparison function since we convert sampler2DShadow to sampler2D
+        source = SHADOW2D_PATTERN.matcher(source).replaceAll("bsl_shadow2D(");
         return source;
     }
 
@@ -402,12 +589,11 @@ public class GLSLTranspiler {
         // Fragment outputs (for single-pass terrain, only output 0)
         preamble.append("\n// ====== BSL Fragment Outputs ======\n");
         preamble.append("layout(location = 0) out vec4 bsl_fragData0;\n");
-        // Additional outputs for MRT (declared but may not be used in single-pass)
-        for (int i = 1; i <= 4; i++) {
-            // Only declare if actually used in source
+        // Additional outputs for MRT — declare as regular variables since we only
+        // have a single color attachment. Writes are silently absorbed.
+        for (int i = 1; i <= 7; i++) {
             if (source.contains("bsl_fragData" + i)) {
-                preamble.append("// layout(location = ").append(i).append(") out vec4 bsl_fragData")
-                        .append(i).append("; // NOT USED in single-pass\n");
+                preamble.append("vec4 bsl_fragData").append(i).append(" = vec4(0.0); // MRT stub\n");
             }
         }
 
@@ -415,6 +601,7 @@ public class GLSLTranspiler {
         preamble.append("\n// ====== BSL Fragment UBO ======\n");
         preamble.append("layout(binding = 1) uniform BSL_FragmentUBO {\n");
         // Matrices first (biggest alignment)
+        preamble.append("    mat4 gbufferProjection;\n");
         preamble.append("    mat4 gbufferProjectionInverse;\n");
         preamble.append("    mat4 gbufferModelView;\n");
         preamble.append("    mat4 gbufferModelViewInverse;\n");
@@ -457,20 +644,32 @@ public class GLSLTranspiler {
         preamble.append("    float bsl_heldBlockLightValue2;\n");
         preamble.append("};\n");
 
-        // Integer uniform aliases (BSL code uses int types)
+        // Integer uniform aliases — use global variables instead of #defines
+        // so that BSL code can redeclare the same name as a local variable (shadowing).
+        // BSL's sunmoon.glsl has "float moonPhase = ..." which shadows the int uniform.
         preamble.append("\n// ====== BSL Integer Uniform Aliases ======\n");
-        preamble.append("#define frameCounter int(bsl_frameCounter)\n");
-        preamble.append("#define isEyeInWater int(bsl_isEyeInWater)\n");
-        preamble.append("#define moonPhase int(bsl_moonPhase)\n");
-        preamble.append("#define worldTime int(bsl_worldTime)\n");
-        preamble.append("#define eyeBrightnessSmooth ivec2(int(bsl_eyeBrightnessSmooth_x), int(bsl_eyeBrightnessSmooth_y))\n");
-        preamble.append("#define heldBlockLightValue int(bsl_heldBlockLightValue)\n");
-        preamble.append("#define heldBlockLightValue2 int(bsl_heldBlockLightValue2)\n");
+        preamble.append("int frameCounter = int(bsl_frameCounter);\n");
+        preamble.append("int isEyeInWater = int(bsl_isEyeInWater);\n");
+        preamble.append("int moonPhase = int(bsl_moonPhase);\n");
+        preamble.append("int worldTime = int(bsl_worldTime);\n");
+        preamble.append("ivec2 eyeBrightnessSmooth = ivec2(int(bsl_eyeBrightnessSmooth_x), int(bsl_eyeBrightnessSmooth_y));\n");
+        preamble.append("int heldBlockLightValue = int(bsl_heldBlockLightValue);\n");
+        preamble.append("int heldBlockLightValue2 = int(bsl_heldBlockLightValue2);\n");
 
         // Note: 'texture' sampler is renamed to 'colortex0' in transpileFragment()
         // to avoid conflict with GLSL 450 built-in texture() function.
 
         // RGB2HSV is defined in BSL's hardcodedEmission.glsl — do NOT duplicate here.
+
+        // Shadow comparison function (replaces hardware sampler2DShadow)
+        preamble.append("\n// ====== BSL Shadow Comparison ======\n");
+        preamble.append("float bsl_shadow2D(sampler2D shadowSampler, vec3 shadowCoord) {\n");
+        preamble.append("    return float(texture(shadowSampler, shadowCoord.xy).r > shadowCoord.z);\n");
+        preamble.append("}\n");
+        preamble.append("vec4 bsl_shadow2D_vec4(sampler2D shadowSampler, vec3 shadowCoord) {\n");
+        preamble.append("    float s = float(texture(shadowSampler, shadowCoord.xy).r > shadowCoord.z);\n");
+        preamble.append("    return vec4(s, s, s, 1.0);\n");
+        preamble.append("}\n");
 
         // Fog function compatibility
         preamble.append("\n// ====== BSL Fog Compatibility ======\n");

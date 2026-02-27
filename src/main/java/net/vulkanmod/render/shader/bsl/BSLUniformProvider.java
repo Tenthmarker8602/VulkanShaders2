@@ -16,6 +16,7 @@ import org.lwjgl.system.MemoryUtil;
 public class BSLUniformProvider {
 
     // Cached matrices
+    private static final MappedBuffer projection = new MappedBuffer(16 * 4);
     private static final MappedBuffer modelViewInverse = new MappedBuffer(16 * 4);
     private static final MappedBuffer projectionInverse = new MappedBuffer(16 * 4);
     private static final MappedBuffer shadowModelView = new MappedBuffer(16 * 4);
@@ -29,6 +30,7 @@ public class BSLUniformProvider {
 
     // Identity matrix for shadow stubs
     static {
+        // Shadow matrices will be updated when shadow pass runs
         Matrix4f identity = new Matrix4f();
         identity.get(shadowModelView.buffer.asFloatBuffer());
         identity.get(shadowProjection.buffer.asFloatBuffer());
@@ -50,6 +52,9 @@ public class BSLUniformProvider {
 
         // Update camera position
         updateCameraPosition();
+
+        // Update shadow matrices from BSLShadowPass
+        updateShadowMatrices();
     }
 
     private static void updateInverseMatrices() {
@@ -59,13 +64,34 @@ public class BSLUniformProvider {
             Matrix4f mvInv = new Matrix4f(mv).invert();
             mvInv.get(modelViewInverse.buffer.asFloatBuffer());
 
-            // Projection inverse
+            // Projection: VulkanMod stores Vulkan [0,1] depth projection (zZeroToOne=true).
+            // BSL expects OpenGL [-1,1] depth conventions, so we must convert.
+            // The conversion from [0,1] to [-1,1] clip space is:
+            //   z_opengl = 2 * z_vulkan - w
+            // Applied as a correction matrix left-multiplied onto the projection:
+            //   P_opengl = DepthCorrection * P_vulkan
             Matrix4f proj = new Matrix4f(VRenderSystem.projectionMatrix.buffer.asFloatBuffer());
-            Matrix4f projInv = new Matrix4f(proj).invert();
+
+            // Convert Vulkan [0,1] projection to OpenGL [-1,1] for BSL compatibility.
+            // Row 2 of the result: new_z = 2*old_z - old_w
+            // In column-major JOML: affects m20,m21,m22,m23 (row 2 elements)
+            Matrix4f projGL = new Matrix4f(proj);
+            // new row2 = 2*row2 - row3: for each column i, m2i = 2*m2i - m3i
+            float m20 = projGL.m20(), m21 = projGL.m21(), m22 = projGL.m22(), m23 = projGL.m23();
+            float m30 = projGL.m30(), m31 = projGL.m31(), m32 = projGL.m32(), m33 = projGL.m33();
+            projGL.m20(2.0f * m20 - m30);
+            projGL.m21(2.0f * m21 - m31);
+            projGL.m22(2.0f * m22 - m32);
+            projGL.m23(2.0f * m23 - m33);
+
+            // Store the OpenGL-convention projection and its inverse for BSL
+            projGL.get(projection.buffer.asFloatBuffer());
+            Matrix4f projInv = new Matrix4f(projGL).invert();
             projInv.get(projectionInverse.buffer.asFloatBuffer());
         } catch (Exception e) {
             // Matrix might be singular during init; use identity
             Matrix4f identity = new Matrix4f();
+            identity.get(projection.buffer.asFloatBuffer());
             identity.get(modelViewInverse.buffer.asFloatBuffer());
             identity.get(projectionInverse.buffer.asFloatBuffer());
         }
@@ -84,9 +110,21 @@ public class BSLUniformProvider {
         }
     }
 
+    /**
+     * Update shadow matrices from BSLShadowPass computed values.
+     */
+    private static void updateShadowMatrices() {
+        if (BSLShadowPass.isInitialized()) {
+            BSLShadowPass.updateShadowMatrices();
+            BSLShadowPass.getShadowModelView().get(shadowModelView.buffer.asFloatBuffer());
+            BSLShadowPass.getShadowProjection().get(shadowProjection.buffer.asFloatBuffer());
+        }
+    }
+
     // ---- Matrix suppliers ----
 
     public static MappedBuffer getModelViewInverse() { return modelViewInverse; }
+    public static MappedBuffer getProjection() { return projection; }
     public static MappedBuffer getProjectionInverse() { return projectionInverse; }
     public static MappedBuffer getShadowModelView() { return shadowModelView; }
     public static MappedBuffer getShadowProjection() { return shadowProjection; }
@@ -139,7 +177,11 @@ public class BSLUniformProvider {
         return player.hasEffect(MobEffects.NIGHT_VISION) ? 1.0f : 0.0f;
     }
 
-    public static float getShadowFade() { return 1.0f; } // Stub — no shadow pass
+    public static float getShadowFade() {
+        // shadowFade is 1.0 when shadows are fully active, 0.0 when disabled
+        // During sunrise/sunset transitions, it fades
+        return BSLShadowPass.isEnabled() ? 1.0f : 0.0f;
+    }
 
     // ---- View/screen ----
 

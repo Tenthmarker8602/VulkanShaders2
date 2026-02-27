@@ -64,6 +64,7 @@ public class Uniforms {
         // BSL Mat4 uniforms
         mat4f_uniformMap.put("gbufferModelView", VRenderSystem::getModelViewMatrix);
         mat4f_uniformMap.put("gbufferModelViewInverse", BSLUniformProvider::getModelViewInverse);
+        mat4f_uniformMap.put("gbufferProjection", BSLUniformProvider::getProjection);
         mat4f_uniformMap.put("gbufferProjectionInverse", BSLUniformProvider::getProjectionInverse);
         mat4f_uniformMap.put("shadowModelView", BSLUniformProvider::getShadowModelView);
         mat4f_uniformMap.put("shadowProjection", BSLUniformProvider::getShadowProjection);

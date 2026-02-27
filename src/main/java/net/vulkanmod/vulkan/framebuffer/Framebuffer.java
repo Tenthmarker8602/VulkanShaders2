@@ -93,8 +93,10 @@ public class Framebuffer {
                 attachments = stack.longs(colorAttachment.getImageView(), depthAttachment.getImageView());
             } else if (colorAttachment != null) {
                 attachments = stack.longs(colorAttachment.getImageView());
+            } else if (depthAttachment != null) {
+                attachments = stack.longs(depthAttachment.getImageView());
             } else {
-                throw new IllegalStateException();
+                throw new IllegalStateException("Framebuffer must have at least one attachment");
             }
 
             LongBuffer pFramebuffer = stack.mallocLong(1);

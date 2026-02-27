@@ -40,6 +40,10 @@ import net.vulkanmod.render.chunk.graph.SectionGraph;
 import net.vulkanmod.render.profiling.BuildTimeProfiler;
 import net.vulkanmod.render.profiling.Profiler;
 import net.vulkanmod.render.vertex.TerrainRenderType;
+import net.vulkanmod.render.shader.bsl.BSLCompositePass;
+import net.vulkanmod.render.shader.bsl.BSLShadowPass;
+import net.vulkanmod.render.shader.bsl.BSLSkyPass;
+import net.vulkanmod.render.shader.bsl.BSLTextureManager;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
@@ -51,6 +55,7 @@ import net.vulkanmod.vulkan.texture.VTextureSelector;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.vulkan.VkCommandBuffer;
 
 import java.util.*;
 
@@ -154,6 +159,10 @@ public class WorldRenderer {
     public void setupRenderer(Camera camera, Frustum frustum, boolean isCapturedFrustum, boolean spectator) {
         Profiler profiler = Profiler.getMainProfiler();
         profiler.push("Setup_Renderer");
+
+        // Reset BSL shadow pass tracking for this frame
+        BSLShadowPass.resetFrame();
+        BSLSkyPass.resetFrame();
 
         ProfilerFiller mcProfiler = net.minecraft.util.profiling.Profiler.get();
 
@@ -310,7 +319,18 @@ public class WorldRenderer {
     }
 
     public void renderSectionLayer(TerrainRenderType renderType, double camX, double camY, double camZ, Matrix4f modelView, Matrix4f projection) {
+        // ---- BSL Shadow Pass (once per frame, before first terrain draw) ----
+        if (BSLShadowPass.isEnabled() && !BSLShadowPass.isShadowPassDone()) {
+            renderBSLShadowPass(camX, camY, camZ);
+            BSLShadowPass.markShadowPassDone();
+        }
+
         Renderer.getInstance().getMainPass().rebindMainTarget();
+
+        // ---- BSL Sky Pass (once per frame, fullscreen sky before terrain) ----
+        if (BSLSkyPass.isEnabled()) {
+            BSLSkyPass.renderSky();
+        }
 
         this.sortTranslucentSections(camX, camY, camZ);
 
@@ -353,6 +373,11 @@ public class WorldRenderer {
 
         VTextureSelector.bindShaderTextures(pipeline);
 
+        // Bind BSL shadow textures if available
+        BSLShadowPass.bindShadowTextures();
+        // Bind BSL textures (noisetex, etc.) — overrides stubs from shadow pass
+        BSLTextureManager.bindTextures();
+
         IndexBuffer indexBuffer = Renderer.getDrawer().getQuadsIndexBuffer().getIndexBuffer();
         Renderer.getDrawer().bindIndexBuffer(Renderer.getCommandBuffer(), indexBuffer, indexBuffer.indexType.value);
 
@@ -392,6 +417,79 @@ public class WorldRenderer {
         }
 
         zone.close();
+    }
+
+    /**
+     * Render the BSL shadow map pass.
+     * Re-renders visible terrain from the sun's perspective into a depth-only framebuffer.
+     */
+    private void renderBSLShadowPass(double camX, double camY, double camZ) {
+        Renderer renderer = Renderer.getInstance();
+        VkCommandBuffer commandBuffer = Renderer.getCommandBuffer();
+
+        // Compute shadow matrices for current sun position
+        BSLShadowPass.updateShadowMatrices();
+
+        // Get shadow MVP (includes camera translation for camera-relative vertices)
+        Matrix4f shadowMVP = BSLShadowPass.getShadowMVP(camX, camY, camZ);
+
+        // Begin shadow render pass
+        BSLShadowPass.beginShadowPass(commandBuffer);
+
+        // Set shadow MVP as the current matrices
+        VRenderSystem.applyMVP(new Matrix4f().identity(), shadowMVP);
+        VRenderSystem.setPrimitiveTopologyGL(GL11.GL_TRIANGLES);
+
+        // Bind shadow pipeline
+        GraphicsPipeline shadowPipeline = BSLShadowPass.getShadowPipeline();
+        renderer.bindGraphicsPipeline(shadowPipeline);
+
+        // Bind block atlas for alpha testing
+        TextureManager textureManager = Minecraft.getInstance().getTextureManager();
+        AbstractTexture blockAtlasTexture = textureManager.getTexture(TextureAtlas.LOCATION_BLOCKS);
+        RenderSystem.setShaderTexture(0, blockAtlasTexture.getTextureView());
+        VTextureSelector.bindShaderTextures(shadowPipeline);
+
+        // Bind index buffer
+        IndexBuffer indexBuffer = Renderer.getDrawer().getQuadsIndexBuffer().getIndexBuffer();
+        Renderer.getDrawer().bindIndexBuffer(commandBuffer, indexBuffer, indexBuffer.indexType.value);
+
+        // Enable depth test, disable blending
+        GlStateManager._enableDepthTest();
+        GlStateManager._depthMask(true);
+        GlStateManager._disableBlend();
+        VRenderSystem.enableCull();
+        VRenderSystem.depthFunc(GL11.GL_LEQUAL);
+
+        // Render SOLID terrain to shadow map
+        TerrainRenderType shadowRenderType = TerrainRenderType.SOLID;
+        Set<TerrainRenderType> allowedRenderTypes = Initializer.CONFIG.uniqueOpaqueLayer
+                ? TerrainRenderType.COMPACT_RENDER_TYPES : TerrainRenderType.SEMI_COMPACT_RENDER_TYPES;
+
+        if (allowedRenderTypes.contains(shadowRenderType)) {
+            shadowRenderType.setCutoutUniform();
+
+            for (Iterator<ChunkArea> iterator = this.sectionGraph.getChunkAreaQueue().iterator(false); iterator.hasNext(); ) {
+                ChunkArea chunkArea = iterator.next();
+                var queue = chunkArea.sectionQueue;
+                DrawBuffers drawBuffers = chunkArea.drawBuffers;
+
+                renderer.uploadAndBindUBOs(shadowPipeline);
+
+                if (drawBuffers.getAreaBuffer(shadowRenderType) != null && queue.size() > 0) {
+                    drawBuffers.bindBuffers(commandBuffer, shadowPipeline, shadowRenderType, camX, camY, camZ);
+                    renderer.uploadAndBindUBOs(shadowPipeline);
+                    drawBuffers.buildDrawBatchesDirect(cameraPos, queue, shadowRenderType);
+                }
+            }
+        }
+
+        // End shadow render pass
+        BSLShadowPass.endShadowPass(commandBuffer);
+
+        // Reset push constants
+        VRenderSystem.setModelOffset(0, 0, 0);
+        renderer.pushConstants(shadowPipeline);
     }
 
     private void sortTranslucentSections(double camX, double camY, double camZ) {

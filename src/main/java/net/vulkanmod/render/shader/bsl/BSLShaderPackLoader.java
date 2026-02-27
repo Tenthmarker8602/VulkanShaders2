@@ -114,6 +114,63 @@ public class BSLShaderPackLoader {
             PipelineManager.applyShaderPackTerrainPipeline(pipeline);
             System.out.println("[BSL] Successfully applied BSL terrain pipeline!");
 
+            // Step 10: Initialize shadow map pass
+            try {
+                boolean shadowOk = BSLShadowPass.init(packDir);
+                if (shadowOk) {
+                    System.out.println("[BSL] Shadow mapping enabled!");
+                } else {
+                    System.out.println("[BSL] Shadow mapping failed, continuing without shadows");
+                }
+            } catch (Exception e) {
+                System.err.println("[BSL] Shadow init error: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            // Step 11: Load and apply water shader for translucent terrain
+            try {
+                GraphicsPipeline waterPipeline = loadWaterPipeline(shadersDir, packDir);
+                if (waterPipeline != null) {
+                    PipelineManager.applyShaderPackWaterPipeline(waterPipeline);
+                    System.out.println("[BSL] Successfully applied BSL water pipeline!");
+                }
+            } catch (Exception e) {
+                System.err.println("[BSL] Water shader load error: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            // Step 12: Initialize BSL sky shader (fullscreen atmospheric sky)
+            try {
+                boolean skyOk = BSLSkyPass.init(shadersDir, packDir);
+                if (skyOk) {
+                    System.out.println("[BSL] Sky shader enabled!");
+                } else {
+                    System.out.println("[BSL] Sky shader failed, continuing with vanilla sky");
+                }
+            } catch (Exception e) {
+                System.err.println("[BSL] Sky shader init error: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            // Step 13: Load BSL textures (noisetex, etc.)
+            try {
+                BSLTextureManager.init(packDir);
+            } catch (Exception e) {
+                System.err.println("[BSL] Texture loading error: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            // Step 14: Initialize composite pass system (deferred + composite + final)
+            try {
+                BSLCompositePass.init(shadersDir, packDir);
+                if (BSLCompositePass.isEnabled()) {
+                    System.out.println("[BSL] Composite passes enabled!");
+                }
+            } catch (Exception e) {
+                System.err.println("[BSL] Composite init error: " + e.getMessage());
+                e.printStackTrace();
+            }
+
             return true;
 
         } catch (Exception e) {
@@ -226,7 +283,8 @@ public class BSLShaderPackLoader {
         fragmentUbo.addProperty("binding", 1);
         JsonArray fragmentFields = new JsonArray();
 
-        // Matrices (5 x mat4)
+        // Matrices (6 x mat4)
+        addField(fragmentFields, "gbufferProjection", "matrix4x4", 16);
         addField(fragmentFields, "gbufferProjectionInverse", "matrix4x4", 16);
         addField(fragmentFields, "gbufferModelView", "matrix4x4", 16);
         addField(fragmentFields, "gbufferModelViewInverse", "matrix4x4", 16);
@@ -281,10 +339,15 @@ public class BSLShaderPackLoader {
 
         // Samplers
         JsonArray samplers = new JsonArray();
-        addSampler(samplers, "Sampler0");   // Block atlas texture
-        addSampler(samplers, "Sampler2");   // Lightmap
-        // BSL also uses noisetex — we'll need to provide a white texture fallback
-        // addSampler(samplers, "noisetex"); // Noise texture — skip for MVP
+        addSampler(samplers, "Sampler0");    // Block atlas texture (binding 2)
+        addSampler(samplers, "Sampler2");    // Lightmap (binding 3)
+        addSampler(samplers, "Sampler4");    // Shadow depth (shadowtex0) - slot 4
+        addSampler(samplers, "Sampler5");    // Shadow depth (shadowtex1) - slot 5
+        addSampler(samplers, "Sampler6");    // noisetex (stub/noise) - slot 6
+        addSampler(samplers, "Sampler7");    // depthtex1 (stub) - slot 7
+        addSampler(samplers, "Sampler8");    // depthtex0 (stub) - slot 8
+        addSampler(samplers, "Sampler9");    // gaux1 (stub) - slot 9
+        addSampler(samplers, "Sampler10");   // gaux2 (stub) - slot 10
         config.add("samplers", samplers);
 
         // Push constants (ModelOffset for terrain chunks)
@@ -333,6 +396,62 @@ public class BSLShaderPackLoader {
             System.out.println("[BSL] Dumped debug shader: " + debugDir.resolve(filename));
         } catch (IOException e) {
             System.err.println("[BSL] Could not dump debug shader: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Load the BSL water shader (gbuffers_water) and create a pipeline for translucent terrain.
+     */
+    private static GraphicsPipeline loadWaterPipeline(Path shadersDir, Path packDir) {
+        try {
+            // Read water fragment source from world0 wrapper
+            Path wrapper = shadersDir.resolve("world0/gbuffers_water.fsh");
+            if (!Files.exists(wrapper)) {
+                System.out.println("[BSL] No water shader found (world0/gbuffers_water.fsh)");
+                return null;
+            }
+
+            String fragmentSource = Files.readString(wrapper, StandardCharsets.UTF_8);
+            fragmentSource = BSLIncludeResolver.resolve(shadersDir, fragmentSource);
+            System.out.println("[BSL Water] Resolved includes: " + fragmentSource.length() + " chars");
+
+            // Transpile with water-specific varying locations
+            String transpiledFragment = GLSLTranspiler.transpileWaterFragment(fragmentSource);
+            System.out.println("[BSL Water] Transpiled fragment shader: " + transpiledFragment.length() + " chars");
+
+            // Generate water vertex shader (same as terrain but with extra varyings)
+            String vertexSource = BSLVertexShaderGenerator.generateWater();
+
+            // Debug dump
+            dumpShader(packDir, "bsl_water.fsh", transpiledFragment);
+            dumpShader(packDir, "bsl_water.vsh", vertexSource);
+
+            // Build pipeline config (same as terrain)
+            JsonObject config = buildPipelineConfig();
+
+            Pipeline.Builder builder = new Pipeline.Builder(
+                    CustomVertexFormat.COMPRESSED_TERRAIN, "bsl_water");
+            builder.parseBindings(config);
+
+            SPIRVUtils.SPIRV vertSpirv = SPIRVUtils.compileShader(
+                    "bsl_water.vsh", vertexSource, SPIRVUtils.ShaderKind.VERTEX_SHADER);
+            SPIRVUtils.SPIRV fragSpirv = SPIRVUtils.compileShader(
+                    "bsl_water.fsh", transpiledFragment, SPIRVUtils.ShaderKind.FRAGMENT_SHADER);
+
+            builder.setVertShaderSPIRV(vertSpirv);
+            builder.setFragShaderSPIRV(fragSpirv);
+
+            GraphicsPipeline pipeline = builder.createGraphicsPipeline();
+            for (var buffer : pipeline.getBuffers()) {
+                buffer.setUseGlobalBuffer(true);
+            }
+
+            return pipeline;
+
+        } catch (Exception e) {
+            System.err.println("[BSL Water] Failed to load water shader: " + e.getMessage());
+            e.printStackTrace();
+            return null;
         }
     }
 }

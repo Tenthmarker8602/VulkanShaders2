@@ -340,6 +340,14 @@ public class Renderer {
             System.err.println("Error applying shader pack: " + e.getMessage());
         }
 
+        // Run BSL composite post-processing (blit scene → colortex0, then fullscreen passes)
+        try {
+            net.vulkanmod.render.shader.bsl.BSLCompositePass.process();
+        } catch (Exception e) {
+            System.err.println("Error running BSL composites: " + e.getMessage());
+            e.printStackTrace();
+        }
+
         mainPass.end(currentCmdBuffer);
 
         submitUploads();

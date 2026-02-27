@@ -27,6 +27,7 @@ public abstract class PipelineManager {
     // Shader pack pipeline replacement system
     private static GraphicsPipeline originalTerrainShader;
     private static GraphicsPipeline shaderPackTerrainPipeline;
+    private static GraphicsPipeline shaderPackWaterPipeline;
 
     private static Function<TerrainRenderType, GraphicsPipeline> shaderGetter;
 
@@ -115,8 +116,36 @@ public abstract class PipelineManager {
         terrainShader = newTerrain;
 
         // Update the shader getter to use the new terrain pipeline
-        setShaderGetter(
-                renderType -> renderType == TerrainRenderType.TRANSLUCENT ? terrainShaderEarlyZ : terrainShader);
+        // If water pipeline is also set, use it for TRANSLUCENT; otherwise use earlyZ for TRANSLUCENT
+        updateShaderGetter();
+
+        System.out.println("[PipelineManager] Shader pack terrain pipeline applied");
+    }
+
+    /**
+     * Apply a shader pack's water pipeline for translucent terrain.
+     */
+    public static void applyShaderPackWaterPipeline(GraphicsPipeline newWater) {
+        if (shaderPackWaterPipeline != null && shaderPackWaterPipeline != terrainShaderEarlyZ) {
+            shaderPackWaterPipeline.scheduleCleanUp();
+        }
+
+        shaderPackWaterPipeline = newWater;
+        updateShaderGetter();
+
+        System.out.println("[PipelineManager] Shader pack water pipeline applied");
+    }
+
+    /**
+     * Update the shader getter to reflect current pipeline state.
+     */
+    private static void updateShaderGetter() {
+        setShaderGetter(renderType -> {
+            if (renderType == TerrainRenderType.TRANSLUCENT) {
+                return shaderPackWaterPipeline != null ? shaderPackWaterPipeline : terrainShaderEarlyZ;
+            }
+            return terrainShader;
+        });
 
         System.out.println("[PipelineManager] Shader pack terrain pipeline applied");
     }
@@ -126,10 +155,14 @@ public abstract class PipelineManager {
      */
     public static void restoreDefaultPipelines() {
         if (originalTerrainShader != null) {
-            // Clean up shader pack pipeline
+            // Clean up shader pack pipelines
             if (shaderPackTerrainPipeline != null) {
                 shaderPackTerrainPipeline.scheduleCleanUp();
                 shaderPackTerrainPipeline = null;
+            }
+            if (shaderPackWaterPipeline != null) {
+                shaderPackWaterPipeline.scheduleCleanUp();
+                shaderPackWaterPipeline = null;
             }
 
             terrainShader = originalTerrainShader;
@@ -150,10 +183,14 @@ public abstract class PipelineManager {
     }
 
     public static void destroyPipelines() {
-        // Clean up shader pack pipeline if active
+        // Clean up shader pack pipelines if active
         if (shaderPackTerrainPipeline != null) {
             shaderPackTerrainPipeline.cleanUp();
             shaderPackTerrainPipeline = null;
+        }
+        if (shaderPackWaterPipeline != null) {
+            shaderPackWaterPipeline.cleanUp();
+            shaderPackWaterPipeline = null;
         }
         // Restore original before cleanup if needed
         if (originalTerrainShader != null) {
