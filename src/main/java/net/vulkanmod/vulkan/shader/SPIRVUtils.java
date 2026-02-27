@@ -4,6 +4,7 @@ import org.lwjgl.system.NativeResource;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -16,6 +17,9 @@ import java.nio.file.Path;
 public class SPIRVUtils {
     
     private static boolean glslcAvailable = false;
+    
+    /** Temp directory where classpath include files are extracted for glslc */
+    private static Path extractedIncludeDir = null;
 
     static {
         initCompiler();
@@ -35,6 +39,43 @@ public class SPIRVUtils {
             System.out.println("SPIRVUtils: glslc not found - shader compilation will be limited");
             System.out.println("  Install glslc from https://github.com/google/shaderc or add org.lwjgl:lwjgl-shaderc:3.3.3+ to build.gradle");
         }
+        
+        if (glslcAvailable) {
+            extractIncludeFiles();
+        }
+    }
+    
+    /**
+     * Extract GLSL include files from the classpath into a temp directory
+     * so that glslc can find them via -I flag. This handles both development
+     * (classes on disk) and production (resources inside JAR) scenarios.
+     */
+    private static void extractIncludeFiles() {
+        String[] includeFiles = {
+            "light.glsl", "fog.glsl", "matrix.glsl", "projection.glsl"
+        };
+        
+        try {
+            extractedIncludeDir = Files.createTempDirectory("vulkanmod_shader_includes_");
+            extractedIncludeDir.toFile().deleteOnExit();
+            
+            for (String fileName : includeFiles) {
+                String resourcePath = "/assets/vulkanmod/shaders/include/" + fileName;
+                try (InputStream is = SPIRVUtils.class.getResourceAsStream(resourcePath)) {
+                    if (is != null) {
+                        Path target = extractedIncludeDir.resolve(fileName);
+                        Files.copy(is, target);
+                        target.toFile().deleteOnExit();
+                    } else {
+                        System.out.println("SPIRVUtils: Include file not found in classpath: " + resourcePath);
+                    }
+                }
+            }
+            System.out.println("SPIRVUtils: Extracted shader includes to " + extractedIncludeDir);
+        } catch (Exception e) {
+            System.err.println("SPIRVUtils: Failed to extract include files: " + e.getMessage());
+            extractedIncludeDir = null;
+        }
     }
 
     public static void addIncludePath(String path) {
@@ -42,12 +83,13 @@ public class SPIRVUtils {
     }
 
     /**
-     * Compile a shader to SPIR-V using glslc or stubs.
+     * Compile a shader to SPIR-V using glslc.
      *
      * @param filename The shader filename
      * @param source The GLSL source code
      * @param shaderKind The shader kind
      * @return SPIRV object containing compiled bytecode
+     * @throws RuntimeException if compilation fails and glslc is not available
      */
     public static SPIRV compileShader(String filename, String source, ShaderKind shaderKind) {
         if (source == null) {
@@ -57,7 +99,9 @@ public class SPIRVUtils {
         if (glslcAvailable) {
             return compileWithGlslc(filename, source, shaderKind);
         } else {
-            return compileFallback(filename, source, shaderKind);
+            throw new RuntimeException(
+                "Cannot compile shader '" + filename + "': glslc is not installed. " +
+                "Install it via: brew install shaderc (macOS) or apt install glslc (Linux)");
         }
     }
 
@@ -79,19 +123,21 @@ public class SPIRVUtils {
                 command.add("glslc");
                 command.add("-fshader-stage=" + getShaderStage(shaderKind));
                 
-                // Add common include paths where VulkanMod stores shaders
-                // These paths cover both development and packaged locations
-                String[] includePaths = {
-                    "assets/vulkanmod/shaders/include",
-                    "assets/vulkanmod/shaders/core",
-                    "src/main/resources/assets/vulkanmod/shaders/include",
-                    "src/main/resources/assets/vulkanmod/shaders/core",
-                    "/home/tenth/hyphenzero-tenth/VulkanShaders2/src/main/resources/assets/vulkanmod/shaders/include",
-                    "/home/tenth/hyphenzero-tenth/VulkanShaders2/src/main/resources/assets/vulkanmod/shaders/core"
+                // Primary include path: extracted classpath includes (always available)
+                if (extractedIncludeDir != null && Files.isDirectory(extractedIncludeDir)) {
+                    command.add("-I");
+                    command.add(extractedIncludeDir.toAbsolutePath().toString());
+                }
+                
+                // Also try filesystem paths for development convenience
+                String userDir = System.getProperty("user.dir", ".");
+                String[] devIncludePaths = {
+                    userDir + "/src/main/resources/assets/vulkanmod/shaders/include",
+                    userDir + "/../src/main/resources/assets/vulkanmod/shaders/include",
                 };
                 
-                for (String path : includePaths) {
-                    java.nio.file.Path p = java.nio.file.Paths.get(path);
+                for (String path : devIncludePaths) {
+                    java.nio.file.Path p = java.nio.file.Paths.get(path).normalize();
                     if (Files.isDirectory(p)) {
                         command.add("-I");
                         command.add(p.toAbsolutePath().toString());
@@ -119,7 +165,7 @@ public class SPIRVUtils {
                 if (exitCode != 0) {
                     System.err.println("Shader compilation failed for " + filename + ":");
                     System.err.println(errorMsg);
-                    throw new RuntimeException("glslc compilation failed: " + errorMsg);
+                    throw new RuntimeException("glslc compilation failed for '" + filename + "': " + errorMsg);
                 }
                 
                 // Read compiled SPIR-V
@@ -136,33 +182,11 @@ public class SPIRVUtils {
                 try { Files.delete(outputFile); } catch (Exception e) { }
             }
             
+        } catch (RuntimeException e) {
+            throw e; // Don't wrap RuntimeExceptions
         } catch (Exception e) {
-            System.err.println("Failed to compile shader " + filename + " with glslc: " + e.getMessage());
-            e.printStackTrace();
-            // Fall back to placeholder
-            return compileFallback(filename, source, shaderKind);
+            throw new RuntimeException("Failed to compile shader '" + filename + "' with glslc: " + e.getMessage(), e);
         }
-    }
-
-    /**
-     * Fallback compilation using minimal SPIR-V bytecode.
-     * This won't work for actual rendering but allows the mod to load.
-     */
-    private static SPIRV compileFallback(String filename, String source, ShaderKind shaderKind) {
-        System.out.println("Warning: Using fallback SPIR-V for " + filename + " (glslc not available)");
-        
-        // Return minimal valid SPIR-V magic number
-        byte[] placeholder = new byte[32];
-        placeholder[0] = 0x07;  // SPIR-V magic number
-        placeholder[1] = 0x23;
-        placeholder[2] = 0x02;
-        placeholder[3] = 0x03;
-        
-        ByteBuffer buffer = ByteBuffer.allocateDirect(32);
-        buffer.put(placeholder);
-        buffer.flip();
-        
-        return new SPIRV(0, buffer);
     }
 
     private static String getShaderExtension(ShaderKind kind) {

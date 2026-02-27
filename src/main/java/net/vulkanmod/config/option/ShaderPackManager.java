@@ -54,6 +54,7 @@ public class ShaderPackManager {
         // Extract bundled shader packs
         extractBundledPack("TestShaders");
         extractBundledPack("SunsetTest");
+        extractBundledPack("CustomShadows");
     }
     
     /**
@@ -161,13 +162,38 @@ public class ShaderPackManager {
                 } else {
                     System.out.println("[ShaderPackManager] Config name is null");
                 }
+            } else if (isOptiFineFormat(packDir)) {
+                // OptiFine/Iris-format pack (BSL, Complementary, etc.)
+                // Create a synthetic ShaderPackConfig from the directory name
+                String dirName = packDir.getFileName().toString();
+                ShaderPackConfig syntheticConfig = new ShaderPackConfig();
+                syntheticConfig.name = dirName;
+                syntheticConfig.version = "1.0";
+                syntheticConfig.description = "OptiFine-format shader pack: " + dirName;
+                syntheticConfig.raytracing = false;
+                syntheticConfig.pipelines = null; // BSL loader handles pipelines programmatically
+
+                ShaderPack pack = new ShaderPack(syntheticConfig, packDir);
+                availablePacks.add(pack);
+                System.out.println("[ShaderPackManager] Loaded OptiFine-format shader pack: " + dirName);
             } else {
-                System.out.println("[ShaderPackManager] pack.json not found");
+                System.out.println("[ShaderPackManager] pack.json not found and not OptiFine format");
             }
         } catch (Exception e) {
             System.err.println("Failed to load pack metadata from " + packDir + ": " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Check if a pack directory is an OptiFine/Iris-format shader pack.
+     * These packs have a shaders/ directory with shaders.properties and program/ subdirectory.
+     */
+    private static boolean isOptiFineFormat(Path packDir) {
+        Path shadersDir = packDir.resolve("shaders");
+        return Files.isDirectory(shadersDir)
+                && Files.exists(shadersDir.resolve("shaders.properties"))
+                && Files.isDirectory(shadersDir.resolve("program"));
     }
     
     /**

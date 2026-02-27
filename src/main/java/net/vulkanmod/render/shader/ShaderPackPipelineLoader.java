@@ -5,6 +5,7 @@ import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.vulkanmod.pack.ShaderPack;
 import net.vulkanmod.render.PipelineManager;
+import net.vulkanmod.render.shader.bsl.BSLShaderPackLoader;
 import net.vulkanmod.render.vertex.CustomVertexFormat;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
@@ -22,6 +23,9 @@ import java.nio.file.Path;
  * Reads GLSL shaders from the shader pack directory, compiles them to SPIR-V
  * using SPIRVUtils (glslc), creates real GraphicsPipeline objects using
  * Pipeline.Builder, and applies them as terrain pipeline replacements.
+ * 
+ * Also detects BSL-format (OptiFine/Iris) shader packs and routes them
+ * through the BSL compatibility layer.
  */
 public class ShaderPackPipelineLoader {
 
@@ -38,6 +42,7 @@ public class ShaderPackPipelineLoader {
 
     /**
      * Load and apply a shader pack's pipelines as real Vulkan pipelines.
+     * Detects BSL-format packs and routes them through the BSL compatibility layer.
      * 
      * @param pack The shader pack to apply
      * @return true if at least one pipeline was successfully applied
@@ -49,6 +54,13 @@ public class ShaderPackPipelineLoader {
         }
 
         Path packDir = pack.getPackPath();
+
+        // Check if this is a BSL-format (OptiFine/Iris) shader pack
+        if (BSLShaderPackLoader.isBSLFormat(packDir)) {
+            System.out.println("[ShaderPackPipelineLoader] Detected BSL-format shader pack, routing to BSL loader");
+            return BSLShaderPackLoader.loadAndApply(packDir);
+        }
+
         boolean anyApplied = false;
 
         for (ShaderPack.PipelineDefinition pipelineDef : pack.getPipelines()) {

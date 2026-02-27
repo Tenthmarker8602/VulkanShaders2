@@ -2,6 +2,7 @@ package net.vulkanmod.vulkan.shader;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import it.unimi.dsi.fastutil.objects.Object2ReferenceOpenHashMap;
+import net.vulkanmod.render.shader.bsl.BSLUniformProvider;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.shader.layout.Uniform;
 import net.vulkanmod.vulkan.util.MappedBuffer;
@@ -55,6 +56,61 @@ public class Uniforms {
         vec4f_uniformMap.put("ColorModulator", VRenderSystem::getShaderColor);
         vec4f_uniformMap.put("FogColor", VRenderSystem::getShaderFogColor);
 
+        // ---- BSL Shader Pack Uniforms ----
+        setupBSLUniforms();
+    }
+
+    private static void setupBSLUniforms() {
+        // BSL Mat4 uniforms
+        mat4f_uniformMap.put("gbufferModelView", VRenderSystem::getModelViewMatrix);
+        mat4f_uniformMap.put("gbufferModelViewInverse", BSLUniformProvider::getModelViewInverse);
+        mat4f_uniformMap.put("gbufferProjectionInverse", BSLUniformProvider::getProjectionInverse);
+        mat4f_uniformMap.put("shadowModelView", BSLUniformProvider::getShadowModelView);
+        mat4f_uniformMap.put("shadowProjection", BSLUniformProvider::getShadowProjection);
+
+        // BSL Vec3 uniforms
+        vec3f_uniformMap.put("cameraPosition", BSLUniformProvider::getCameraPosition);
+        vec3f_uniformMap.put("relativeEyePosition", BSLUniformProvider::getCameraPosition);
+
+        // BSL Vec4 uniforms (FogColor mapped as FogColor_bsl)
+        vec4f_uniformMap.put("FogColor_bsl", VRenderSystem::getShaderFogColor);
+
+        // BSL Float uniforms
+        vec1f_uniformMap.put("timeAngle", BSLUniformProvider::getTimeAngle);
+        vec1f_uniformMap.put("timeBrightness", BSLUniformProvider::getTimeBrightness);
+        vec1f_uniformMap.put("frameTimeCounter", BSLUniformProvider::getFrameTimeCounter);
+        vec1f_uniformMap.put("rainStrength", BSLUniformProvider::getRainStrength);
+        vec1f_uniformMap.put("nightVision", BSLUniformProvider::getNightVision);
+        vec1f_uniformMap.put("shadowFade", BSLUniformProvider::getShadowFade);
+        vec1f_uniformMap.put("near", BSLUniformProvider::getNear);
+        vec1f_uniformMap.put("far", BSLUniformProvider::getFar);
+        vec1f_uniformMap.put("viewWidth", BSLUniformProvider::getViewWidth);
+        vec1f_uniformMap.put("viewHeight", BSLUniformProvider::getViewHeight);
+        vec1f_uniformMap.put("screenBrightness", BSLUniformProvider::getScreenBrightness);
+        vec1f_uniformMap.put("cloudHeight", BSLUniformProvider::getCloudHeight);
+        vec1f_uniformMap.put("endFlashIntensity", BSLUniformProvider::getEndFlashIntensity);
+        vec1f_uniformMap.put("aspectRatio", BSLUniformProvider::getAspectRatio);
+        vec1f_uniformMap.put("sunPathRotation", BSLUniformProvider::getSunPathRotation);
+
+        // BSL integer uniforms stored as floats (BSL UBO uses float for these)
+        vec1f_uniformMap.put("bsl_frameCounter", () -> (float) BSLUniformProvider.getFrameCounter());
+        vec1f_uniformMap.put("bsl_isEyeInWater", () -> (float) BSLUniformProvider.getIsEyeInWater());
+        vec1f_uniformMap.put("bsl_moonPhase", () -> (float) BSLUniformProvider.getMoonPhase());
+        vec1f_uniformMap.put("bsl_worldTime", () -> (float) BSLUniformProvider.getWorldTime());
+
+        // BSL eye brightness components (stored as floats)
+        vec1f_uniformMap.put("eyeBrightnessSmooth_x", BSLUniformProvider::getEyeBrightnessX);
+        vec1f_uniformMap.put("eyeBrightnessSmooth_y", BSLUniformProvider::getEyeBrightnessY);
+
+        // BSL hand light stubs
+        vec1f_uniformMap.put("heldBlockLightValue", BSLUniformProvider::getHeldBlockLightValue);
+        vec1f_uniformMap.put("heldBlockLightValue2", BSLUniformProvider::getHeldBlockLightValue2);
+
+        // Padding fields (UBO alignment — always 0.0)
+        vec1f_uniformMap.put("_vpad0", () -> 0.0f);
+        vec1f_uniformMap.put("_vpad1", () -> 0.0f);
+        vec1f_uniformMap.put("_pad0", () -> 0.0f);
+        vec1f_uniformMap.put("_pad1", () -> 0.0f);
     }
 
     public static Supplier<MappedBuffer> getUniformSupplier(String type, String name) {

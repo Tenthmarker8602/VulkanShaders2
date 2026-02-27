@@ -104,7 +104,9 @@ public class ShaderPackPostProcessor {
 
         // Determine color based on shader pack
         int r, g, b, a;
-        if (pack.getName().contains("Test") && !pack.getName().contains("Sunset")) {
+        if (pack.getName().contains("Shadow")) {
+            r = 120; g = 80; b = 200; a = 120;   // Purple for shadow pack
+        } else if (pack.getName().contains("Test") && !pack.getName().contains("Sunset")) {
             r = 0; g = 200; b = 100; a = 100;   // Green
         } else if (pack.getName().contains("Sunset")) {
             r = 255; g = 140; b = 0; a = 100;    // Orange

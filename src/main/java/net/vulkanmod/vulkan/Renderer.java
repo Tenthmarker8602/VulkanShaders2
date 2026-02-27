@@ -259,6 +259,9 @@ public class Renderer {
 
         this.preInitFrame();
 
+        // Update BSL shader pack per-frame state (time, matrices, camera)
+        net.vulkanmod.render.shader.bsl.BSLUniformProvider.updatePerFrame();
+
         Profiler p = Profiler.getMainProfiler();
         p.pop();
         p.push("Frame_fence");
