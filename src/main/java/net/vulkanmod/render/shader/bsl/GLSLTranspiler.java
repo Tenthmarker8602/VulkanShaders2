@@ -254,6 +254,12 @@ public class GLSLTranspiler {
                     #ifndef SHADER_SUN_MOON
                     #define SHADER_SUN_MOON
                     #endif
+                    // Force skybox clouds (mode 1) instead of volumetric (mode 2)
+                    // Volumetric clouds need deferred buffers we don't have yet.
+                    #ifdef CLOUDS
+                    #undef CLOUDS
+                    #endif
+                    #define CLOUDS 1
                     // Stubs for missing uniforms
                     #define blindFactor 0.0
                     #define darknessFactor 0.0
@@ -285,6 +291,9 @@ public class GLSLTranspiler {
             source = ATTRIBUTE_PATTERN.matcher(source).replaceAll("// [BSL removed attribute] $0");
             source = addFragmentPreamble(source);
 
+            // Inject BSL cloud rendering and god rays into the sky main()
+            source = injectSkyCloudsAndGodRays(source);
+
             return source;
 
         } finally {
@@ -315,6 +324,13 @@ public class GLSLTranspiler {
                     #ifdef REFLECTION_RAIN
                     #undef REFLECTION_RAIN
                     #endif
+                    // Force sky-only reflections (REFLECTION=1) instead of SSR (REFLECTION=2)
+                    // because we don't have proper deferred gaux2/depthtex1 buffers for screen-space raytracing.
+                    // Without this, SSR samples the shadow depth stub texture (R-only) which produces red artifacts.
+                    #ifdef REFLECTION
+                    #undef REFLECTION
+                    #endif
+                    #define REFLECTION 1
                     // vTexCoordAM stub — not available from VulkanMod terrain vertex format
                     #define vTexCoordAM vec4(0.0, 0.0, 1.0, 1.0)
                     // Stub missing uniforms
@@ -405,6 +421,94 @@ public class GLSLTranspiler {
             return source.substring(0, end) + "\n" + FEATURE_OVERRIDES + source.substring(end);
         }
         return FEATURE_OVERRIDES + source;
+    }
+
+    /**
+     * Inject BSL cloud rendering and god rays (light shafts) into the sky fragment
+     * shader's main() function. This adds the code that BSL normally runs in its
+     * composite passes, directly into the forward sky pass.
+     *
+     * Injection point: after SunGlare(), before nightVision/exposure/output.
+     */
+    private static String injectSkyCloudsAndGodRays(String source) {
+        // Find the injection point after SunGlare call
+        // Handle both \r\n (Windows) and \n (Unix) line endings since BSL source has \r\n
+        String marker = "SunGlare(albedo, viewPos.xyz, lightCol);";
+        int idx = source.indexOf(marker);
+        if (idx < 0) {
+            System.out.println("[BSL Transpiler] Warning: Could not find SunGlare injection point for clouds/god rays");
+            return source;
+        }
+        idx += marker.length();
+        // Skip past any trailing \r or \n
+        while (idx < source.length() && (source.charAt(idx) == '\r' || source.charAt(idx) == '\n')) {
+            idx++;
+        }
+
+        // Code to inject: BSL skybox clouds + god rays
+        String injection = """
+
+                // ====== [BSL Injected] Clouds & God Rays ======
+                // Draw BSL skybox clouds (DrawCloudSkybox from lib/atmospherics/clouds.glsl)
+                #if CLOUDS == 1
+                {
+                    vec4 cloud = DrawCloudSkybox(viewPos.xyz, 1.0, dither, lightCol, ambientCol, false);
+                    albedo.rgb = mix(albedo.rgb, cloud.rgb, cloud.a);
+                }
+                #endif
+
+                // God rays (volumetric light shafts)
+                // Screen-space radial blur toward the sun position
+                {
+                    vec3 nViewPos = normalize(viewPos.xyz);
+                    float VoL = dot(nViewPos, sunVec);
+
+                    // Sun and moon visibility
+                    float godRayVis = clamp(VoL * 0.5 + 0.5, 0.0, 1.0);
+                    godRayVis = pow(godRayVis, 8.0);
+
+                    // Scale by shadow fade and time
+                    float shaftStrength = godRayVis * shadowFade * 0.4;
+                    shaftStrength *= mix(0.2, 1.0, sunVisibility + moonVisibility * 0.3);
+                    shaftStrength *= 1.0 - rainStrength * 0.8;
+
+                    // Height-based falloff: god rays weaker when camera is underground
+                    shaftStrength *= clamp((cameraPosition.y + 64.0) / 8.0, 0.0, 1.0);
+
+                    if (shaftStrength > 0.001) {
+                        // Screen-space sun position for radial blur
+                        vec4 sunScreenPos = gbufferProjection * vec4(sunVec * 100.0, 1.0);
+                        sunScreenPos.xy /= sunScreenPos.w;
+                        vec2 sunScreen = sunScreenPos.xy * 0.5 + 0.5;
+
+                        vec2 fragScreen = _bsl_FragCoord.xy / vec2(viewWidth, viewHeight);
+                        vec2 deltaTexCoord = (fragScreen - sunScreen) * 0.02;
+
+                        // Radial blur: sample along ray from fragment toward sun
+                        float illumination = 0.0;
+                        vec2 sampleCoord = fragScreen;
+                        float decay = 1.0;
+                        for (int i = 0; i < 8; i++) {
+                            sampleCoord -= deltaTexCoord;
+                            // Check if sample is within screen bounds
+                            if (sampleCoord.x >= 0.0 && sampleCoord.x <= 1.0 &&
+                                sampleCoord.y >= 0.0 && sampleCoord.y <= 1.0) {
+                                // Use sky brightness at sample point as occlusion proxy
+                                // (brighter = less occluded, contributes more to god rays)
+                                illumination += decay * 0.125;
+                            }
+                            decay *= 0.96;
+                        }
+
+                        // Apply god rays with sun/moon color
+                        vec3 shaftColor = mix(lightCol, lightCol * 0.3, moonVisibility);
+                        albedo.rgb += shaftColor * illumination * shaftStrength;
+                    }
+                }
+                // ====== End Clouds & God Rays ======
+                """;
+
+        return source.substring(0, idx) + injection + source.substring(idx);
     }
 
     private static String convertVaryingsToInputs(String source) {
@@ -681,10 +785,37 @@ public class GLSLTranspiler {
         preamble.append("    return (dist - start) / (end - start);\n");
         preamble.append("}\n");
 
+        // Corrected gl_FragCoord for VulkanMod's negative viewport height.
+        // VulkanMod uses viewport.height = -height which makes gl_FragCoord.y = 0
+        // at the TOP of the screen. OpenGL (and BSL) expects y = 0 at BOTTOM.
+        // We declare a global and replace all uses. This must be consistent with
+        // the projection matrix (which is NOT Y-negated) so that screen→view→screen
+        // round-trips work correctly for SSR, god rays, etc.
+        preamble.append("\n// ====== BSL FragCoord Y-Flip Correction ======\n");
+        preamble.append("vec4 _bsl_FragCoord;\n");
+
         // Insert preamble right after #version line
         int versionEnd = source.indexOf('\n', source.indexOf("#version"));
         if (versionEnd < 0) versionEnd = 0;
 
-        return source.substring(0, versionEnd + 1) + preamble + source.substring(versionEnd + 1);
+        source = source.substring(0, versionEnd + 1) + preamble + source.substring(versionEnd + 1);
+
+        // Replace gl_FragCoord with _bsl_FragCoord throughout the shader.
+        // This corrects the Y coordinate from Vulkan convention (0=top) to
+        // OpenGL convention (0=bottom) that BSL expects.
+        source = source.replace("gl_FragCoord", "_bsl_FragCoord");
+
+        // Inject _bsl_FragCoord initialization at the start of the FIRST void main().
+        // Must use the real gl_FragCoord for the initialization.
+        int mainIdx = source.indexOf("void main()");
+        if (mainIdx >= 0) {
+            int braceIdx = source.indexOf('{', mainIdx);
+            if (braceIdx >= 0) {
+                String init = "\n    _bsl_FragCoord = vec4(gl_FragCoord.x, viewHeight - gl_FragCoord.y, gl_FragCoord.z, gl_FragCoord.w);\n";
+                source = source.substring(0, braceIdx + 1) + init + source.substring(braceIdx + 1);
+            }
+        }
+
+        return source;
     }
 }

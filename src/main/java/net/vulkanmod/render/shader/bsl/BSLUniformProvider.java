@@ -84,12 +84,12 @@ public class BSLUniformProvider {
             projGL.m22(2.0f * r2c2 - r3c2);
             projGL.m32(2.0f * r2c3 - r3c3);
 
-            // Step 2: Negate row 1 (Y output) to compensate for VulkanMod's
-            // negative viewport height (gl_FragCoord.y = 0 at TOP, not BOTTOM).
-            projGL.m01(-projGL.m01());
-            projGL.m11(-projGL.m11());
-            projGL.m21(-projGL.m21());
-            projGL.m31(-projGL.m31());
+            // NOTE: We do NOT negate the projection Y here. VulkanMod uses
+            // a negative viewport height which flips gl_FragCoord.y, but we
+            // correct that in the GLSL transpiler by replacing gl_FragCoord
+            // with a corrected version (_bsl_FragCoord). This keeps ALL
+            // screen-space operations consistent (screen→view AND view→screen),
+            // which is essential for SSR reflections, god rays, etc.
 
             // Store corrected projection and its inverse
             projGL.get(projection.buffer.asFloatBuffer());
@@ -151,14 +151,25 @@ public class BSLUniformProvider {
 
     private static void updateCameraPosition() {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null) {
-            double x = mc.player.getX();
-            double y = mc.player.getY();
-            double z = mc.player.getZ();
+        // Use the actual render camera position, NOT the player foot position.
+        // BSL expects cameraPosition to match the origin that worldPos is relative to.
+        // VulkanMod's ModelOffset subtracts camera.getPosition(), so cameraPosition
+        // must match that exactly. Using player.getX/Y/Z() causes water waves and
+        // other world-space lookups (worldPos + cameraPosition) to slide with the
+        // eye-height / interpolation offset.
+        net.minecraft.client.Camera camera = mc.gameRenderer != null ? mc.gameRenderer.getMainCamera() : null;
+        if (camera != null && camera.isInitialized()) {
+            net.minecraft.world.phys.Vec3 camPos = camera.getPosition();
             long ptr = cameraPositionBuf.ptr;
-            MemoryUtil.memPutFloat(ptr, (float) x);
-            MemoryUtil.memPutFloat(ptr + 4, (float) y);
-            MemoryUtil.memPutFloat(ptr + 8, (float) z);
+            MemoryUtil.memPutFloat(ptr, (float) camPos.x);
+            MemoryUtil.memPutFloat(ptr + 4, (float) camPos.y);
+            MemoryUtil.memPutFloat(ptr + 8, (float) camPos.z);
+        } else if (mc.player != null) {
+            // Fallback before camera is initialized
+            long ptr = cameraPositionBuf.ptr;
+            MemoryUtil.memPutFloat(ptr, (float) mc.player.getX());
+            MemoryUtil.memPutFloat(ptr + 4, (float) mc.player.getEyeY());
+            MemoryUtil.memPutFloat(ptr + 8, (float) mc.player.getZ());
         }
     }
 
