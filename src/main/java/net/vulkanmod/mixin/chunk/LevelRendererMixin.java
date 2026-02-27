@@ -1,6 +1,7 @@
 package net.vulkanmod.mixin.chunk;
 
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import com.mojang.blaze3d.framegraph.FrameGraphBuilder;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
@@ -22,6 +23,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import net.vulkanmod.render.chunk.WorldRenderer;
 import net.vulkanmod.render.profiling.Profiler;
+import net.vulkanmod.render.shader.bsl.BSLSkyPass;
 import net.vulkanmod.render.vertex.TerrainRenderType;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
@@ -182,6 +184,23 @@ public abstract class LevelRendererMixin {
     @Redirect(method = "addWeatherPass", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;getDepthFar()F"))
     private float getRenderDistanceZFar(GameRenderer instance) {
         return instance.getRenderDistance() * 4F;
+    }
+
+    /**
+     * Cancel vanilla sky rendering (sky disc, sunrise gradient, sun/moon quads, stars, dark disc)
+     * when BSL sky shader is active — BSL renders its own fullscreen procedural sky.
+     */
+    @Unique private static int skyPassDebugCounter = 0;
+
+    @Inject(method = "addSkyPass", at = @At("HEAD"), cancellable = true)
+    private void cancelVanillaSkyWhenBSLActive(FrameGraphBuilder frameGraphBuilder, Camera camera,
+                                                GpuBufferSlice gpuBufferSlice, CallbackInfo ci) {
+        if (BSLSkyPass.isEnabled()) {
+            if (skyPassDebugCounter++ < 5) {
+                System.out.println("[BSL] Cancelling vanilla addSkyPass (BSL sky active)");
+            }
+            ci.cancel();
+        }
     }
 
 }

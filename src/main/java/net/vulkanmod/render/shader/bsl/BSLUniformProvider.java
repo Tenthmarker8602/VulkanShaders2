@@ -22,6 +22,8 @@ public class BSLUniformProvider {
     private static final MappedBuffer shadowModelView = new MappedBuffer(16 * 4);
     private static final MappedBuffer shadowProjection = new MappedBuffer(16 * 4);
     private static final MappedBuffer cameraPositionBuf = new MappedBuffer(3 * 4);
+    private static final MappedBuffer sunPositionBuf = new MappedBuffer(3 * 4);
+    private static final MappedBuffer moonPositionBuf = new MappedBuffer(3 * 4);
 
     // Frame counter
     private static int frameCounter = 0;
@@ -37,7 +39,9 @@ public class BSLUniformProvider {
     }
 
     /**
-     * Called once per frame to update time-dependent state.
+     * Called once per frame to update time-dependent state (non-matrix).
+     * Matrix updates happen separately in updateMatrices() which is called
+     * from WorldRenderer with the correct 3D camera matrices.
      */
     public static void updatePerFrame() {
         frameCounter++;
@@ -47,9 +51,6 @@ public class BSLUniformProvider {
         lastFrameTime = now;
         frameTimeCounter += deltaSeconds;
 
-        // Update inverse matrices
-        updateInverseMatrices();
-
         // Update camera position
         updateCameraPosition();
 
@@ -57,44 +58,95 @@ public class BSLUniformProvider {
         updateShadowMatrices();
     }
 
-    private static void updateInverseMatrices() {
+    /**
+     * Called from WorldRenderer.renderSectionLayer() with the correct 3D camera
+     * matrices BEFORE sky/terrain rendering. This ensures BSL shaders get the
+     * real perspective projection and camera view, not stale GUI/shadow matrices.
+     */
+    public static void updateMatrices(Matrix4f modelView, Matrix4f projection_) {
         try {
             // ModelView inverse
-            Matrix4f mv = new Matrix4f(VRenderSystem.modelViewMatrix.buffer.asFloatBuffer());
-            Matrix4f mvInv = new Matrix4f(mv).invert();
+            Matrix4f mvInv = new Matrix4f(modelView).invert();
             mvInv.get(modelViewInverse.buffer.asFloatBuffer());
 
-            // Projection: VulkanMod stores Vulkan [0,1] depth projection (zZeroToOne=true).
-            // BSL expects OpenGL [-1,1] depth conventions, so we must convert.
-            // The conversion from [0,1] to [-1,1] clip space is:
-            //   z_opengl = 2 * z_vulkan - w
-            // Applied as a correction matrix left-multiplied onto the projection:
-            //   P_opengl = DepthCorrection * P_vulkan
-            Matrix4f proj = new Matrix4f(VRenderSystem.projectionMatrix.buffer.asFloatBuffer());
+            // Projection: VulkanMod uses Vulkan [0,1] depth (zZeroToOne=true).
+            // BSL expects OpenGL [-1,1] depth, and VulkanMod uses negative
+            // viewport height which inverts gl_FragCoord.y relative to OpenGL.
+            Matrix4f projGL = new Matrix4f(projection_);
 
-            // Convert Vulkan [0,1] projection to OpenGL [-1,1] for BSL compatibility.
-            // Row 2 of the result: new_z = 2*old_z - old_w
-            // In column-major JOML: affects m20,m21,m22,m23 (row 2 elements)
-            Matrix4f projGL = new Matrix4f(proj);
-            // new row2 = 2*row2 - row3: for each column i, m2i = 2*m2i - m3i
-            float m20 = projGL.m20(), m21 = projGL.m21(), m22 = projGL.m22(), m23 = projGL.m23();
-            float m30 = projGL.m30(), m31 = projGL.m31(), m32 = projGL.m32(), m33 = projGL.m33();
-            projGL.m20(2.0f * m20 - m30);
-            projGL.m21(2.0f * m21 - m31);
-            projGL.m22(2.0f * m22 - m32);
-            projGL.m23(2.0f * m23 - m33);
+            // Step 1: Convert Vulkan [0,1] depth to OpenGL [-1,1] depth.
+            // z_opengl = 2 * z_vulkan - w → new_row2 = 2 * old_row2 - old_row3
+            // JOML: mXY = column X, row Y
+            float r2c0 = projGL.m02(), r2c1 = projGL.m12(), r2c2 = projGL.m22(), r2c3 = projGL.m32();
+            float r3c0 = projGL.m03(), r3c1 = projGL.m13(), r3c2 = projGL.m23(), r3c3 = projGL.m33();
+            projGL.m02(2.0f * r2c0 - r3c0);
+            projGL.m12(2.0f * r2c1 - r3c1);
+            projGL.m22(2.0f * r2c2 - r3c2);
+            projGL.m32(2.0f * r2c3 - r3c3);
 
-            // Store the OpenGL-convention projection and its inverse for BSL
+            // Step 2: Negate row 1 (Y output) to compensate for VulkanMod's
+            // negative viewport height (gl_FragCoord.y = 0 at TOP, not BOTTOM).
+            projGL.m01(-projGL.m01());
+            projGL.m11(-projGL.m11());
+            projGL.m21(-projGL.m21());
+            projGL.m31(-projGL.m31());
+
+            // Store corrected projection and its inverse
             projGL.get(projection.buffer.asFloatBuffer());
             Matrix4f projInv = new Matrix4f(projGL).invert();
             projInv.get(projectionInverse.buffer.asFloatBuffer());
+
+            // Update sun/moon position using the correct camera modelView
+            updateSunMoonPosition(modelView);
         } catch (Exception e) {
-            // Matrix might be singular during init; use identity
             Matrix4f identity = new Matrix4f();
             identity.get(projection.buffer.asFloatBuffer());
             identity.get(modelViewInverse.buffer.asFloatBuffer());
             identity.get(projectionInverse.buffer.asFloatBuffer());
         }
+    }
+
+    /**
+     * Compute sun/moon position in view space (OptiFine convention).
+     * sunPosition = normalize(gbufferModelView * vec4(sunWorldDir, 0.0)) * 100.0
+     */
+    private static void updateSunMoonPosition(Matrix4f modelView) {
+        float ta = getTimeAngle();
+        float sunPathRad = getSunPathRotation() * 0.01745329251994f;
+        float cosRot = (float) Math.cos(sunPathRad);
+        float sinRot = (float) -Math.sin(sunPathRad);
+
+        // BSL's smoothed celestial angle
+        float ang = ta - 0.25f;
+        ang = ang - (float) Math.floor(ang); // fract
+        ang = (float) ((ang + (Math.cos(ang * Math.PI) * -0.5 + 0.5 - ang) / 3.0) * 2.0 * Math.PI);
+
+        float sdx = (float) -Math.sin(ang);
+        float sdy = (float) (Math.cos(ang) * cosRot);
+        float sdz = (float) (Math.cos(ang) * sinRot);
+
+        // Direction transform: modelView * vec4(sunDir, 0.0)
+        // JOML mXY = col X, row Y → result[row] = sum(col) m[col][row] * v[col]
+        float vx = modelView.m00() * sdx + modelView.m10() * sdy + modelView.m20() * sdz;
+        float vy = modelView.m01() * sdx + modelView.m11() * sdy + modelView.m21() * sdz;
+        float vz = modelView.m02() * sdx + modelView.m12() * sdy + modelView.m22() * sdz;
+
+        // Normalize and scale to 100.0 (OptiFine convention)
+        float len = (float) Math.sqrt(vx * vx + vy * vy + vz * vz);
+        if (len > 0.001f) {
+            vx = vx / len * 100.0f;
+            vy = vy / len * 100.0f;
+            vz = vz / len * 100.0f;
+        }
+
+        MemoryUtil.memPutFloat(sunPositionBuf.ptr, vx);
+        MemoryUtil.memPutFloat(sunPositionBuf.ptr + 4, vy);
+        MemoryUtil.memPutFloat(sunPositionBuf.ptr + 8, vz);
+
+        // Moon is opposite direction
+        MemoryUtil.memPutFloat(moonPositionBuf.ptr, -vx);
+        MemoryUtil.memPutFloat(moonPositionBuf.ptr + 4, -vy);
+        MemoryUtil.memPutFloat(moonPositionBuf.ptr + 8, -vz);
     }
 
     private static void updateCameraPosition() {
@@ -129,6 +181,8 @@ public class BSLUniformProvider {
     public static MappedBuffer getShadowModelView() { return shadowModelView; }
     public static MappedBuffer getShadowProjection() { return shadowProjection; }
     public static MappedBuffer getCameraPosition() { return cameraPositionBuf; }
+    public static MappedBuffer getSunPosition() { return sunPositionBuf; }
+    public static MappedBuffer getMoonPosition() { return moonPositionBuf; }
 
     // ---- Time uniforms ----
 

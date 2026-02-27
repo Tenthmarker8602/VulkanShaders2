@@ -44,6 +44,7 @@ import net.vulkanmod.render.shader.bsl.BSLCompositePass;
 import net.vulkanmod.render.shader.bsl.BSLShadowPass;
 import net.vulkanmod.render.shader.bsl.BSLSkyPass;
 import net.vulkanmod.render.shader.bsl.BSLTextureManager;
+import net.vulkanmod.render.shader.bsl.BSLUniformProvider;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
@@ -326,6 +327,11 @@ public class WorldRenderer {
         }
 
         Renderer.getInstance().getMainPass().rebindMainTarget();
+
+        // Apply correct 3D camera matrices BEFORE sky rendering.
+        // Without this, BSL shaders see stale matrices from the shadow pass or previous frame.
+        VRenderSystem.applyMVP(modelView, projection);
+        BSLUniformProvider.updateMatrices(modelView, projection);
 
         // ---- BSL Sky Pass (once per frame, fullscreen sky before terrain) ----
         if (BSLSkyPass.isEnabled()) {

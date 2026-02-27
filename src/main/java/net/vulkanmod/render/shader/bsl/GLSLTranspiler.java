@@ -254,9 +254,6 @@ public class GLSLTranspiler {
                     #ifndef SHADER_SUN_MOON
                     #define SHADER_SUN_MOON
                     #endif
-                    // Make sun/moon disc larger for visibility (debug)
-                    #undef SHADER_SUN_MOON_SIZE
-                    #define SHADER_SUN_MOON_SIZE 3.0
                     // Stubs for missing uniforms
                     #define blindFactor 0.0
                     #define darknessFactor 0.0
@@ -642,6 +639,11 @@ public class GLSLTranspiler {
         // Dynamic handlight stubs
         preamble.append("    float bsl_heldBlockLightValue;\n");
         preamble.append("    float bsl_heldBlockLightValue2;\n");
+        // Sun/moon position in view space (OptiFine convention, vec3 + std140 padding)
+        preamble.append("    vec3 sunPosition;\n");
+        preamble.append("    float _padSun;\n");
+        preamble.append("    vec3 moonPosition;\n");
+        preamble.append("    float _padMoon;\n");
         preamble.append("};\n");
 
         // Integer uniform aliases — use global variables instead of #defines

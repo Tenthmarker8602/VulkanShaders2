@@ -265,6 +265,11 @@ public class BSLSkyPass {
         addField(fragmentFields, "eyeBrightnessSmooth_y", "float", 1);
         addField(fragmentFields, "heldBlockLightValue", "float", 1);
         addField(fragmentFields, "heldBlockLightValue2", "float", 1);
+        // Sun/moon position in view space (vec3 + std140 padding)
+        addField(fragmentFields, "sunPosition", "float", 3);
+        addField(fragmentFields, "_padSun", "float", 1);
+        addField(fragmentFields, "moonPosition", "float", 3);
+        addField(fragmentFields, "_padMoon", "float", 1);
         fragmentUbo.add("fields", fragmentFields);
         ubos.add(fragmentUbo);
 

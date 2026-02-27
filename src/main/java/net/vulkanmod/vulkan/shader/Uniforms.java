@@ -72,6 +72,8 @@ public class Uniforms {
         // BSL Vec3 uniforms
         vec3f_uniformMap.put("cameraPosition", BSLUniformProvider::getCameraPosition);
         vec3f_uniformMap.put("relativeEyePosition", BSLUniformProvider::getCameraPosition);
+        vec3f_uniformMap.put("sunPosition", BSLUniformProvider::getSunPosition);
+        vec3f_uniformMap.put("moonPosition", BSLUniformProvider::getMoonPosition);
 
         // BSL Vec4 uniforms (FogColor mapped as FogColor_bsl)
         vec4f_uniformMap.put("FogColor_bsl", VRenderSystem::getShaderFogColor);
@@ -112,6 +114,8 @@ public class Uniforms {
         vec1f_uniformMap.put("_vpad1", () -> 0.0f);
         vec1f_uniformMap.put("_pad0", () -> 0.0f);
         vec1f_uniformMap.put("_pad1", () -> 0.0f);
+        vec1f_uniformMap.put("_padSun", () -> 0.0f);
+        vec1f_uniformMap.put("_padMoon", () -> 0.0f);
     }
 
     public static Supplier<MappedBuffer> getUniformSupplier(String type, String name) {
